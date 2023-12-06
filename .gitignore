@@ -1,0 +1,4 @@
+log/app.log
+*__pycache__/
+*venv/
+src/basket/

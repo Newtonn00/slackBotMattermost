@@ -1,0 +1,27 @@
+version: "3.5"
+services:
+  slack_bot_service:
+    #image: newtonn2211/slackbotmattermost-slack_bot_service:latest
+    build:
+      context: ./
+      dockerfile: Dockerfile
+      network: default
+
+    ports:
+      - "3005:3005"
+    volumes:
+      - "/Users/olegtetenev/Public/settings.ini:/var/app/slackbot_mattermost/settings.ini"
+      - "/Users/olegtetenev/Public/log:/var/app/slackbot_mattermost/log"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    labels:
+      - "version=1.0.0"
+    deploy:
+      replicas: 1
+    image: newtonn2211/slackbotmattermost-slack_bot_service:latest
+
+networks:
+ default:

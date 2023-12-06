@@ -1,0 +1,5 @@
+{"slack_id": 1,
+  "last_datetime_synchronize": "10.12.2022 21:14",
+  "excluded_channels": ["general", "random"],
+  "excluded_users": ["newtonn"]
+}

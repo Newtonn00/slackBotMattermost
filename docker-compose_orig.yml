@@ -1,0 +1,19 @@
+version: "3.5"
+services:
+  slack_service:
+    image: newtonn2211/slackbotmattermost-slack_bot_service:latest
+    ports:
+      - "3005:3005"
+    volumes:
+      - "./src:/var/app/slackbot_mattermost/src"
+      - "/Users/olegtetenev/Public/settings.ini:/var/app/slackbot_mattermost/settings.ini"
+      - "/Users/olegtetenev/Public/log:/var/app/slackbot_mattermost/log"
+    tty: true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  default:
