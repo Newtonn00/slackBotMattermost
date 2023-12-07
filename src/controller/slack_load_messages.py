@@ -18,7 +18,7 @@ class SlackLoadMessages:
         self._config_service = config_service
         self._messages_service = messages_service
         self._mattermost_upload_messages = mattermost_upload_messages
-        self._messages_per_page = 200
+        self._messages_per_page = 50
         self._channels_filter = []
 
     def load_channel_messages(self):
@@ -184,6 +184,7 @@ class SlackLoadMessages:
 
     def load_users(self) -> dict:
         try:
+            self._logger_bot.info("Started loading Slack users")
             user_list = self._web_client.users_list()["members"]
         except SlackApiError as e:
             self._logger_bot.error(f"SlackAPIError (users_list): {e.response['error']}")
@@ -196,6 +197,8 @@ class SlackLoadMessages:
             user_display_name = user["profile"].get("display_name")
             if user_display_name == "" or user_display_name is None:
                 user_display_name = user.get("real_name")
+            if user_display_name == "" or user_display_name is None:
+                user_display_name = user_name
             user_email = user["profile"].get("email") if "profile" in user and user["profile"] is not None else None
             user_is_bot = user.get("is_bot")
             user_first_name = user.get("first_name")
@@ -211,15 +214,18 @@ class SlackLoadMessages:
     def load_channels(self) -> dict:
 
         try:
+            self._logger_bot.info("Started loading Slack channels")
             response = self._web_client.conversations_list(types="public_channel,private_channel",
                                                            limit=self._messages_per_page)
             channels_list = response["channels"]
+            self._logger_bot.info("Loaded %s channels", len(response["channels"]))
             next_cursor = response["response_metadata"]["next_cursor"]
 
             while next_cursor:
                 response = self._web_client.conversations_list(types="public_channel,private_channel",
                                                                limit=self._messages_per_page, cursor=next_cursor)
                 channels_list.extend(response["channels"])
+                self._logger_bot.info("Loaded %s channels", len(response["channels"]))
                 next_cursor = response["response_metadata"]["next_cursor"]
 
         except SlackApiError as e:
@@ -286,10 +292,9 @@ class SlackLoadMessages:
     def _download_files(self, files_attach: list) -> list:
         files_list = []
         for files in files_attach:
-            if files["timestamp"] == 0:
+            if "url_private_download" not in files :
                 break
             self._logger_bot.info(f'{files["name"]} is downloading')
-            self._logger_bot.info("Files: %s", files)
             response_file = requests.get(files["url_private_download"],
                                          headers={
                                              'Authorization': 'Bearer %s' % self._slack_token})
@@ -315,3 +320,5 @@ class SlackLoadMessages:
             else:
                 self._logger_bot.error(f'SlackAPIError (files): {response_file.json()}')
         return files_list
+
+

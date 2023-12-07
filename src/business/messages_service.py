@@ -1,8 +1,10 @@
+import logging
 import re
 
 
 class MessagesService:
     def __init__(self, config_service, mattermost_upload_messages):
+        self._logger_bot = logging.getLogger("")
         self._users_list = {}
         self._channels_list = {}
         self._config_service = config_service
@@ -34,35 +36,41 @@ class MessagesService:
                         "is_thread": message["is_thread"]}
 
         if "attachments" in message:
-#            if message["attachments"][0]["author_id"] != user_id:
+            #            if message["attachments"][0]["author_id"] != user_id:
             if len(message_dict["text"]) > 0:
                 message_dict["text"] = message_dict["text"] + '\n'
 
             attachments = message["attachments"]
 
             for attachment in attachments:
-                message_dict["text"] = message_dict["text"] + \
-                                        f'>>> <@{attachment["author_id"]}> ' \
-                                        f'{attachment["text"]} \n'
-                message_dict["text"] = self.replace_mentions(message_dict["text"])
+                if "author_id" in attachment:
+                    message_dict["text"] = message_dict["text"] + \
+                                           f'>>> <@{attachment["author_id"]}> ' \
+                                           f'{attachment["text"]} \n'
+                    message_dict["text"] = self.replace_mentions(message_dict["text"])
+                else:
+                    self._logger_bot.info("Message without author_id: %s", attachment)
+                    message_dict["text"] = message_dict["text"] + \
+                                           f'>>> {attachment["fallback"]} '
+                    message_dict["text"] = self.replace_mentions(message_dict["text"])
 
         if message_dict["is_attached"]:
             message_dict["files"] = message["files"]
 
-#            if "attachments" not in message:
-#                if message["files"][0]["user_id"] != user_id:
-#                    if len(message_dict["text"]) > 0:
-#                        message_dict["text"] = message_dict["text"] + '\n'
-#                    attachments = message["files"]
-#                    for attachment in attachments:
-#                        message_dict["text"] = message_dict["text"] + \
-#                                               f'>>> <@{attachment["user_id"]}> \n'
-#                        message_dict["text"] = self.replace_mentions(message_dict["text"])
+        #            if "attachments" not in message:
+        #                if message["files"][0]["user_id"] != user_id:
+        #                    if len(message_dict["text"]) > 0:
+        #                        message_dict["text"] = message_dict["text"] + '\n'
+        #                    attachments = message["files"]
+        #                    for attachment in attachments:
+        #                        message_dict["text"] = message_dict["text"] + \
+        #                                               f'>>> <@{attachment["user_id"]}> \n'
+        #                        message_dict["text"] = self.replace_mentions(message_dict["text"])
 
         if message_dict["is_thread"]:
             reply_list = []
             for reply_message in message["reply"]:
-                reply_dict = {"text": reply_message["text"], "user_id": reply_message["user"],
+                reply_dict = {"text": self.replace_mentions(reply_message["text"]), "user_id": reply_message["user"],
                               "user":
                                   {
                                       "user_id": reply_message["user"],
@@ -108,8 +116,13 @@ class MessagesService:
     def replace_function(self, match):
         matched_text = match.group(0)
         matched_text = matched_text[2:len(matched_text) - 1]
-        user_data = self._users_list.get(matched_text, {"name": match.group(0)})
-        return "@" + user_data["display_name"]
+        user_data = self._users_list.get(matched_text)
+        user_name = user_data["name"]
+        if user_name == '' or user_name is None:
+            user_name = match.group(0)
+        else:
+            user_name = "@" + user_data["name"]
+        return user_name
 
     def replace_mentions(self, msg_text: str) -> str:
         pattern = r'<@[\w\d]+>'

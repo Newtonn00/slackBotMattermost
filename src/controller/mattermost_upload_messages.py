@@ -5,8 +5,8 @@ from requests import HTTPError
 
 class MattermostUploadMessages:
     def __init__(self, mattermost_web_client):
-        self._channels_list = None
-        self._users_list = None
+        self._channels_list = []
+        self._users_list = []
         self._team_id = None
         self._logger_bot = logging.getLogger("")
         self._mm_web_client = mattermost_web_client
@@ -18,27 +18,23 @@ class MattermostUploadMessages:
             "page": 0,  # Номер страницы (начиная с 0)
             "per_page": self._messages_per_page  # Количество элементов на странице
         }
+        self._users_list = []
         try:
-            response = self._mm_web_client.mattermost_session.get(f'{self._mm_web_client.mattermost_url}/users')
-            response.raise_for_status()
-            users = response.json()
-            self._users_list = users
-            params["page"] += 1
-            if len(users) == self._messages_per_page:
-                while True:
-                    response = self._mm_web_client.mattermost_session.get(
-                        f'{self._mm_web_client.mattermost_url}/users',
-                        params=params)
-                    response.raise_for_status()
-                    users = response.json()
+            while True:
+                response = self._mm_web_client.mattermost_session.get(
+                    f'{self._mm_web_client.mattermost_url}/users',
+                    params=params)
+                response.raise_for_status()
+                users = response.json()
 
-                    if not users:
-                        break
+                if not users:
+                    break
 
-                    self._users_list.extend(users)
-                    params["page"] += 1  # Переходим на следующую страницу
+                self._users_list.extend(users)
+                params["page"] += 1  # Переходим на следующую страницу
 
             self._logger_bot.info("Mattermost users loaded (%d)", len(self._users_list))
+
 
         except HTTPError:
             self._logger_bot.error(
@@ -49,32 +45,23 @@ class MattermostUploadMessages:
             "page": 0,  # Номер страницы (начиная с 0)
             "per_page": self._messages_per_page  # Количество элементов на странице
         }
-
+        self._channels_list = []
         try:
-            response = self._mm_web_client.mattermost_session.get(f'{self._mm_web_client.mattermost_url}/channels',
-                                                                  params=params)
+            while True:
+                response = self._mm_web_client.mattermost_session.get(
+                    f'{self._mm_web_client.mattermost_url}/channels',
+                    params=params)
+                response.raise_for_status()
+                channels = response.json()
 
-            response.raise_for_status()
-            channels = response.json()
-            self._channels_list = channels
+                if not channels:
+                    break
+                self._channels_list.extend(channels)
+                params["page"] += 1  # Переходим на следующую страницу
+            self._logger_bot.info("Mattermost channels loaded (%d)", len(self._channels_list))
+            channels = self._channels_list
             for channel in channels:
                 self._set_channels_members(channel["id"])
-
-            params["page"] += 1
-            if len(channels) == self._messages_per_page:
-                while True:
-                    response = self._mm_web_client.mattermost_session.get(
-                        f'{self._mm_web_client.mattermost_url}/channels',
-                        params=params)
-                    response.raise_for_status()
-                    channels = response.json()
-
-                    if not channels:
-                        break
-
-                    self._channels_list.extend(channels)
-                    params["page"] += 1  # Переходим на следующую страницу
-            self._logger_bot.info("Mattermost channels loaded (%d)", len(self._channels_list))
         except HTTPError:
             self._logger_bot.error(
                 f'Mattermost API Error (channels). Status code: {response.status_code} Response:{response.text}')
@@ -287,8 +274,12 @@ class MattermostUploadMessages:
         if user_id is None or channel_id is None:
             return
 
-        try:
 
+
+        try:
+            self._logger_bot.info("Started adding user %s to channel %s", user_id, channel_id)
+            self._logger_bot.info("Users data: %s", self._get_user(user_id))
+            self._logger_bot.info("Channels data: %s", self._get_channel(channel_id))
             payload = {
                "user_id": user_id,
             }
