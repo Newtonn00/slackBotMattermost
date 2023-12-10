@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import datetime
 
 
 class MessagesService:
@@ -57,16 +58,6 @@ class MessagesService:
         if message_dict["is_attached"]:
             message_dict["files"] = message["files"]
 
-        #            if "attachments" not in message:
-        #                if message["files"][0]["user_id"] != user_id:
-        #                    if len(message_dict["text"]) > 0:
-        #                        message_dict["text"] = message_dict["text"] + '\n'
-        #                    attachments = message["files"]
-        #                    for attachment in attachments:
-        #                        message_dict["text"] = message_dict["text"] + \
-        #                                               f'>>> <@{attachment["user_id"]}> \n'
-        #                        message_dict["text"] = self.replace_mentions(message_dict["text"])
-
         if message_dict["is_thread"]:
             reply_list = []
             for reply_message in message["reply"]:
@@ -95,7 +86,7 @@ class MessagesService:
                     reply_dict["files"] = reply_message["files"]
                 reply_list.append(reply_dict)
             message_dict["reply"] = reply_list
-
+        message_dict["text"] = self._add_timestamp_to_text(message_dict["text"], message_dict["ts"])
         self.mm_upload_msg.upload_messages(message_dict)
 
     def _find_user_name_by_key(self, key) -> str:
@@ -113,7 +104,7 @@ class MessagesService:
     def set_channels_list(self, channels_list):
         self._channels_list = channels_list
 
-    def replace_function(self, match):
+    def replace_user_function(self, match):
         matched_text = match.group(0)
         matched_text = matched_text[2:len(matched_text) - 1]
         user_data = self._users_list.get(matched_text)
@@ -124,11 +115,49 @@ class MessagesService:
             user_name = "@" + user_data["name"]
         return user_name
 
+    def replace_channel_function(self, match) -> str:
+        matched_text = match.group(0)
+        matched_text = matched_text[2:matched_text.find('|')]
+        channel_data = self._channels_list.get(matched_text)
+        channel_name = channel_data["name"]
+        if channel_name == '' or channel_name is None:
+            channel_name = match.group(0)
+        else:
+            channel_name = "~" + channel_data["name"]
+        return channel_name
+
     def replace_mentions(self, msg_text: str) -> str:
+
         pattern = r'<@[\w\d]+>'
         regex = re.compile(pattern)
         match = re.search(regex, msg_text)
-        if match is None:
+        if match:
+            return re.sub(pattern, self.replace_user_function, msg_text)
+
+        pattern = r'<#([\w\d]+)\|([\w\d]+)?>'
+        regex = re.compile(pattern)
+        match = re.search(regex, msg_text)
+        if match:
+            return re.sub(pattern, self.replace_channel_function, msg_text)
+
+        pattern = r'<!here>'
+        regex = re.compile(pattern)
+        match = re.search(regex, msg_text)
+        if match:
+            return re.sub(pattern, "@here", msg_text)
+
+        pattern = r'<!channel>'
+        regex = re.compile(pattern)
+        match = re.search(regex, msg_text)
+        if not match:
             return msg_text
         else:
-            return re.sub(pattern, self.replace_function, msg_text)
+            return re.sub(pattern, "@channel", msg_text)
+
+    def _add_timestamp_to_text(self, msg_text: str, timestamp: float) -> str:
+        msg_with_ts = msg_text
+        if msg_with_ts != "" and msg_with_ts is not None:
+            msg_with_ts = msg_with_ts + f'\n\n slack_ts: {datetime.fromtimestamp(float(timestamp)).strftime("%Y-%m-%d %H:%M:%S")}'
+        else:
+            msg_with_ts = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        return msg_with_ts

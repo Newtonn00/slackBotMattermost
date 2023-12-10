@@ -7,6 +7,7 @@ class MattermostUploadMessages:
     def __init__(self, mattermost_web_client):
         self._channels_list = []
         self._users_list = []
+        self._channel_filter = []
         self._team_id = None
         self._logger_bot = logging.getLogger("")
         self._mm_web_client = mattermost_web_client
@@ -35,7 +36,6 @@ class MattermostUploadMessages:
 
             self._logger_bot.info("Mattermost users loaded (%d)", len(self._users_list))
 
-
         except HTTPError:
             self._logger_bot.error(
                 f'Mattermost API Error (users). Status code: {response.status_code} Response:{response.text}')
@@ -46,6 +46,7 @@ class MattermostUploadMessages:
             "per_page": self._messages_per_page  # Количество элементов на странице
         }
         self._channels_list = []
+        channels_list = []
         try:
             while True:
                 response = self._mm_web_client.mattermost_session.get(
@@ -56,11 +57,16 @@ class MattermostUploadMessages:
 
                 if not channels:
                     break
-                self._channels_list.extend(channels)
+                channels_list.extend(channels)
                 params["page"] += 1  # Переходим на следующую страницу
-            self._logger_bot.info("Mattermost channels loaded (%d)", len(self._channels_list))
-            channels = self._channels_list
-            for channel in channels:
+            self._logger_bot.info("Mattermost channels loaded (%d)", len(channels_list))
+            filtered_channels = []
+            for channel in channels_list:
+                if self._is_selected_channel(channel["name"]):
+                    filtered_channels.append(channel)
+
+            self.set_channels_list(filtered_channels)
+            for channel in filtered_channels:
                 self._set_channels_members(channel["id"])
         except HTTPError:
             self._logger_bot.error(
@@ -71,7 +77,7 @@ class MattermostUploadMessages:
         user_data = message_data["user"]
         user_id = self._get_user_by_email(user_data)
         if channel_id is None:
-            self._logger_bot.error("Channel %s did`nt find in Mattermost", message_data["channel_name"])
+            self._logger_bot.error("Channel %s did`nt find in Mattermost", message_data["channel"]["channel_name"])
             return
 
         if not self._is_user_in_channel(user_id=user_id, channel_id=channel_id):
@@ -220,6 +226,7 @@ class MattermostUploadMessages:
             channel_id = response_data["id"]
             self._channels_list.append(response_data)
             self._logger_bot.info("Channel %s created", channel_data["channel_name"])
+            self._get_channels_members(channel_id)
         else:
             self._logger_bot.error(
                 f'Mattermost API Error (channels). Status code: {response.status_code} Response:{response.text}')
@@ -274,14 +281,12 @@ class MattermostUploadMessages:
         if user_id is None or channel_id is None:
             return
 
-
-
         try:
             self._logger_bot.info("Started adding user %s to channel %s", user_id, channel_id)
             self._logger_bot.info("Users data: %s", self._get_user(user_id))
             self._logger_bot.info("Channels data: %s", self._get_channel(channel_id))
             payload = {
-               "user_id": user_id,
+                "user_id": user_id,
             }
 
             response = self._mm_web_client.mattermost_session.post(f'{self._mm_web_client.mattermost_url}'
@@ -344,7 +349,7 @@ class MattermostUploadMessages:
     def _add_user_to_team(self, user_id: str, team_id: str):
         try:
             payload = {
-               "user_id": user_id,
+                "user_id": user_id,
             }
 
             response = self._mm_web_client.mattermost_session.post(f'{self._mm_web_client.mattermost_url}'
@@ -357,3 +362,22 @@ class MattermostUploadMessages:
             self._logger_bot.error(
                 f'Mattermost API Error (teams/members). Status code: {response.status_code} Response:{response.text}')
 
+    def set_channel_filter(self, channel_filter):
+        if len(channel_filter) != 0 and channel_filter != 'all':
+            self._channel_filter = channel_filter.split(" ")
+
+    def set_channels_list(self, channels):
+        self._channels_list = channels
+
+    def set_users_list(self, users):
+        self._users_list = users
+
+    def _is_selected_channel(self, channel_name) -> bool:
+        is_channel_selected = False
+        if len(self._channel_filter) == 0:
+            is_channel_selected = True
+        else:
+            if channel_name in self._channel_filter:
+                is_channel_selected = True
+
+        return is_channel_selected

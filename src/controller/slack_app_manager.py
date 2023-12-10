@@ -99,12 +99,12 @@ class SlackAppManager:
             return
         self.logger_bot.info("Transfer messages started")
 
-        self._load_messages.set_channels_filter(command_params)
+        self._load_messages.set_channel_filter(command_params)
+        self._mattermost_upload_messages.set_channel_filter(command_params)
         self._mattermost_upload_messages.load_users()
         self._mattermost_upload_messages.load_channels()
         self._mattermost_upload_messages.load_team_id()
         self._load_messages.load_channel_messages()
-        self._load_messages.load_direct_messages()
         self.logger_bot.info("Transfer messages finished")
 
         respond("Transfer messages finished")
