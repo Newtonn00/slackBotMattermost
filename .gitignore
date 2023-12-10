@@ -1,7 +1,0 @@
-log/app.log
-*__pycache__/
-*venv/
-src/basket/
-settings.ini
-.gitignore
-config.json
