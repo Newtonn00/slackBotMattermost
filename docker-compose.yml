@@ -11,7 +11,7 @@ services:
       - "3005:3005"
     volumes:
       - "/Users/olegtetenev/Public/settings.ini:/var/app/slackbot_mattermost/settings.ini"
-      - "/Users/olegtetenev/Public/settings.ini:/var/app/slackbot_mattermost/config.json"
+      - "/Users/olegtetenev/Public/config.json:/var/app/slackbot_mattermost/config.json"
       - "/Users/olegtetenev/Public/log:/var/app/slackbot_mattermost/log"
     logging:
       driver: "json-file"

@@ -30,104 +30,106 @@ class SlackLoadMessages:
         self._channel_filter = []
 
     def load_channel_messages(self):
+
         self.load_channels()
         self.load_users()
         self._messages_service.set_users_list(self._users_list)
         self._messages_service.set_channels_list(self._channels_list)
         self._logger_bot.info("Loading messages from public and private channels")
         for channel_id, channel_item in self._channels_list.items():
-            oldest_date = self._config_service.get_last_synchronize_date_unix(channel_name=channel_item["name"])
-            new_start_date = oldest_date
-            self._logger_bot.info("Start loading messages from channel %s, from date - %d", channel_item["name"],
-                                  oldest_date)
-            cursor = None
+            if self._is_selected_channel(channel_item["name"]) and self._config_service.is_allowed_channel(
+                    channel_item["name"]):
+                oldest_date = self._config_service.get_last_synchronize_date_unix(channel_name=channel_item["name"])
+                new_start_date = oldest_date
+                self._logger_bot.info("Start loading messages from channel %s, from date - %d", channel_item["name"],
+                                      oldest_date)
+                cursor = None
 
-            messages = []
-            while True:
-                try:
-                    max_retries = 3
-                    retry_count = 0
+                messages = []
+                while True:
+                    try:
+                        max_retries = 3
+                        retry_count = 0
 
-                    while retry_count < max_retries:
-                        self._logger_bot.info("Starting request to Slack (conversations_history). %d times repeated", retry_count)
-                        response = self._web_client.conversations_history(
-                            channel=channel_item["id"],
-                            limit=self._messages_per_page,
-                            oldest=oldest_date + 1,
-                            cursor=cursor
-                        )
-                        response_code = response.status_code
+                        while retry_count < max_retries:
+                            self._logger_bot.info(
+                                "Starting request to Slack (conversations_history). %d times repeated",
+                                retry_count)
+                            response = self._web_client.conversations_history(
+                                channel=channel_item["id"],
+                                limit=self._messages_per_page,
+                                oldest=oldest_date + 1,
+                                cursor=cursor
+                            )
+                            response_code = response.status_code
 
-                        if response_code == self.OK:
-                            message_for_sort = response["messages"]
-                            message_for_sort = reversed(message_for_sort)
-                            messages.extend(message_for_sort)
-                            break
-                        else:
-                            retry_count += 1
-                            time.sleep(2)
-                    if retry_count ==max_retries:
-
-                        raise SlackApiError(message=f'Timeout after {retry_count} retries',
-                                            response={"error": f' Timeout error, {self.REQUEST_TIME_OUT}'})
-                    if response["has_more"]:
-                        cursor = response["response_metadata"]["next_cursor"]
-                    else:
-                        break
-                except SlackApiError as e:
-                    self._logger_bot.error(
-                        f"SlackAPIError (conversations_history): {e.response['error']}")
-                    break
-
-
-            self._logger_bot.info("Selected %d messages from Slack channel %s", len(messages),
-                                  channel_item["name"])
-
-            for message in messages:
-                message["is_thread"] = False
-                if "reply_users" in message:
-                    message["reply"] = self._load_threads(channel_id=channel_item["id"], oldest_date=oldest_date,
-                                                          ts_of_parent_message=message["ts"])
-                    message["is_thread"] = True
-                message["channel"] = channel_item["id"]
-                if new_start_date < float(message["ts"]):
-                    new_start_date = float(message["ts"])
-
-                files_list = []
-                message["is_attached"] = False
-                if "files" in message:
-                    files_list = self._download_files(message["files"])
-                    message["is_attached"] = True
-                    message["files"] = files_list
-                if "attachments" in message:
-                    attachments = message["attachments"]
-                    for attachment in attachments:
-                        if "files" in attachment:
-                            files_list = self._download_files(attachment["files"])
-                            message["is_attached"] = True
-                            if "files" in message:
-                                message["files"].append(files_list)
+                            if response_code == self.OK:
+                                message_for_sort = response["messages"]
+                                message_for_sort = reversed(message_for_sort)
+                                messages.extend(message_for_sort)
+                                break
                             else:
-                                message["files"] = files_list
+                                retry_count += 1
+                                time.sleep(2)
+                        if retry_count == max_retries:
+                            raise SlackApiError(message=f'Timeout after {retry_count} retries',
+                                                response={"error": f' Timeout error, {self.REQUEST_TIME_OUT}'})
+                        if response["has_more"]:
+                            cursor = response["response_metadata"]["next_cursor"]
+                        else:
+                            break
+                    except SlackApiError as e:
+                        self._logger_bot.error(
+                            f"SlackAPIError (conversations_history): {e.response['error']}")
+                        break
 
-                self._messages_service.save_messages_to_dict(message)
-                if message["is_thread"]:
-                    for reply_message in message["reply"]:
-                        if "files" in reply_message and reply_message["files"]:
-                            files_list.extend(reply_message["files"])
+                self._logger_bot.info("Selected %d messages from Slack channel %s", len(messages),
+                                      channel_item["name"])
 
-                if files_list:
-                    for files in files_list:
-                        if os.path.exists(files["file_path"]):
-                            os.remove(files["file_path"])
-                            self._logger_bot.info("Deleted file %s from %s", files["file_name"],
-                                                  files["file_path"])
+                for message in messages:
+                    message["is_thread"] = False
+                    if "reply_users" in message:
+                        message["reply"] = self._load_threads(channel_id=channel_item["id"], oldest_date=oldest_date,
+                                                              ts_of_parent_message=message["ts"])
+                        message["is_thread"] = True
+                    message["channel"] = channel_item["id"]
+                    if new_start_date < float(message["ts"]):
+                        new_start_date = float(message["ts"])
 
-                self._config_service.set_last_synchronize_date_unix(new_start_date,
-                                                                    channel_name=channel_item["name"])
+                    files_list = []
+                    message["is_attached"] = False
+                    if "files" in message:
+                        files_list = self._download_files(message["files"])
+                        message["is_attached"] = True
+                        message["files"] = files_list
+                    if "attachments" in message:
+                        attachments = message["attachments"]
+                        for attachment in attachments:
+                            if "files" in attachment:
+                                files_list = self._download_files(attachment["files"])
+                                message["is_attached"] = True
+                                if "files" in message:
+                                    message["files"].append(files_list)
+                                else:
+                                    message["files"] = files_list
+
+                    self._messages_service.save_messages_to_dict(message)
+                    if message["is_thread"]:
+                        for reply_message in message["reply"]:
+                            if "files" in reply_message and reply_message["files"]:
+                                files_list.extend(reply_message["files"])
+
+                    if files_list:
+                        for files in files_list:
+                            if os.path.exists(files["file_path"]):
+                                os.remove(files["file_path"])
+                                self._logger_bot.info("Deleted file %s from %s", files["file_name"],
+                                                      files["file_path"])
+
+                    self._config_service.set_last_synchronize_date_unix(new_start_date,
+                                                                        channel_name=channel_item["name"])
 
     def _load_threads(self, channel_id, ts_of_parent_message, oldest_date) -> list:
-        reply_messages = []
         try:
             response = self._web_client.conversations_replies(
                 channel=channel_id,
@@ -187,9 +189,9 @@ class SlackLoadMessages:
                 user_display_name = user_name
             user_email = user["profile"].get("email") if "profile" in user and user["profile"] is not None else None
             user_is_bot = user.get("is_bot")
-            user_first_name = user.get("first_name")
-            user_last_name = user.get("last_name")
-            user_is_deleted = user.get("is_deleted")
+            user_first_name = user["profile"].get("first_name")
+            user_last_name = user["profile"].get("last_name")
+            user_is_deleted = user.get("deleted")
             users[user["id"]] = {"id": user_id, "name": user_name, "email": user_email, "is_bot": user_is_bot,
                                  "is_deleted": user_is_deleted, "first_name": user_first_name,
                                  "last_name": user_last_name, "display_name": user_display_name}
@@ -209,7 +211,7 @@ class SlackLoadMessages:
                                       retry_count)
 
                 response = self._web_client.conversations_list(types="public_channel,private_channel",
-                                                           limit=self._messages_per_page)
+                                                               limit=self._messages_per_page)
                 response_code = response.status_code
                 if response_code == self.OK:
 
@@ -290,7 +292,8 @@ class SlackLoadMessages:
                     if response_code == self.OK:
 
                         response = self._web_client.conversations_list(types="im,mpim",
-                                                                       limit=self._messages_per_page, cursor=next_cursor)
+                                                                       limit=self._messages_per_page,
+                                                                       cursor=next_cursor)
                         channels_users_list.extend(response["channels"])
                         next_cursor = response["response_metadata"]["next_cursor"]
                         break
@@ -309,26 +312,100 @@ class SlackLoadMessages:
 
         channels = {}
         for channel in channels_list:
-            if self._is_selected_channel(channel["name"]) and self._config_service.is_allowed_channel(channel["name"]):
-                channel_id = channel["id"]
-                channel_name = channel["name"]
-                if channel["is_private"]:
-                    channel_type = "private"
-                else:
-                    channel_type = "public"
-                channels[channel["id"]] = {"id": channel_id, "name": channel_name, "type": channel_type}
+            channel_id = channel["id"]
+            channel_name = channel["name"]
+            if channel["is_private"]:
+                channel_type = "private"
+            else:
+                channel_type = "public"
+            channels[channel["id"]] = {"id": channel_id, "name": channel_name, "type": channel_type}
 
         for channel in channels_users_list:
             if "name" in channel:
                 channel_name = channel["name"]
             else:
                 channel_name = channel["user"]
-            if self._is_selected_channel(channel_name) and self._config_service.is_allowed_channel(channel_name):
-                channel_id = channel["id"]
-                channel_type = "direct"
-                channels[channel["id"]] = {"id": channel_id, "name": channel_name, "type": channel_type}
+            channel_id = channel["id"]
+            channel_type = "direct"
+            channels[channel["id"]] = {"id": channel_id, "name": channel_name, "type": channel_type}
 
         self.set_channels_list(channels)
+
+        for channel in channels:
+            if self._is_selected_channel(self._get_channel(channel)["name"]) \
+                    and self._config_service.is_allowed_channel(self._get_channel(channel)["name"]):
+                members = self._load_channel_members(channel)
+                self._set_channels_members(channel, members)
+
+    def _load_channel_members(self, channel_id: str) -> list:
+
+        try:
+
+            max_retries = 3
+            retry_count = 0
+            members_list = []
+            while retry_count < max_retries:
+                self._logger_bot.info("Starting request to Slack (channels/members). %d times repeated",
+                                      retry_count)
+
+                response = self._web_client.conversations_members(channel=channel_id,
+                                                                  limit=self._messages_per_page)
+                response_code = response.status_code
+                if response_code == self.OK:
+
+                    members_list = response["members"]
+                    self._logger_bot.info("Loaded %s members for channel %s", len(response["members"]),
+                                          self._get_channel(channel_id)["name"])
+                    break
+                else:
+                    retry_count += 1
+                    time.sleep(5)
+
+            if retry_count == max_retries:
+                raise SlackApiError(message=f'Timeout after {retry_count} retries',
+                                    response={"error": f' Timeout error, {self.REQUEST_TIME_OUT}'})
+
+            next_cursor = response["response_metadata"]["next_cursor"]
+
+            while next_cursor:
+                max_retries = 3
+                retry_count = 0
+                while retry_count < max_retries:
+                    self._logger_bot.info("Starting request to Slack (channels|members). "
+                                          "%d times repeated",
+                                          retry_count)
+                    response = self._web_client.conversations_members(channel=channel_id,
+                                                                      limit=self._messages_per_page, cursor=next_cursor)
+                    response_code = response.status_code
+                    if response_code == self.OK:
+
+                        members_list.extend(response["members"])
+                        self._logger_bot.info("Loaded %s members for channel %s", len(response["members"]),
+                                              self._get_channel(channel_id)["name"])
+                        next_cursor = response["response_metadata"]["next_cursor"]
+                        break
+                    else:
+                        retry_count += 1
+                        time.sleep(5)
+
+                    if retry_count == max_retries:
+                        raise SlackApiError(message=f'Timeout after {retry_count} retries',
+                                            response={"error": f' Timeout error, {self.REQUEST_TIME_OUT}'})
+
+        except SlackApiError as e:
+            self._logger_bot.error(f"SlackAPIError (conversations_members): "
+                                   f"{e.response['error']}")
+            return []
+        return members_list
+
+    def _set_channels_members(self, channel_id: str, members: list):
+        channels = self._channels_list
+        i = 0
+        for key, channel in channels.items():
+            if channel["id"] == channel_id:
+                self._channels_list[key]["members"] = members
+                break
+            i += 1
 
     def set_channel_filter(self, channel_filter: str):
         if len(channel_filter) != 0 and channel_filter != "all":
@@ -362,7 +439,7 @@ class SlackLoadMessages:
                             local_file.write(chunk)
                     self._logger_bot.info(
                         f'File {files["name"]} is downloaded to {local_file_path}')
-                except Exception as e:
+                except Exception:
                     self._logger_bot.error("Error in downloading as local file")
 
                 files_dict = {
@@ -381,3 +458,9 @@ class SlackLoadMessages:
 
     def set_users_list(self, users: dict):
         self._users_list = users
+
+    def _get_channel(self, channel_id: str) -> dict:
+        for key, channel in self._channels_list.items():
+            if channel["id"] == channel_id:
+                return channel
+        return {}

@@ -11,13 +11,13 @@ class MattermostUploadMessages:
         self._team_id = None
         self._logger_bot = logging.getLogger("")
         self._mm_web_client = mattermost_web_client
-        #        self._team_id = 'iwmq1ygp47rg3jqxtxw1iwfn7e'
         self._messages_per_page = 100
 
     def load_users(self):
+        response = ''
         params = {
-            "page": 0,  # Номер страницы (начиная с 0)
-            "per_page": self._messages_per_page  # Количество элементов на странице
+            "page": 0,
+            "per_page": self._messages_per_page
         }
         self._users_list = []
         try:
@@ -32,7 +32,7 @@ class MattermostUploadMessages:
                     break
 
                 self._users_list.extend(users)
-                params["page"] += 1  # Переходим на следующую страницу
+                params["page"] += 1
 
             self._logger_bot.info("Mattermost users loaded (%d)", len(self._users_list))
 
@@ -41,9 +41,10 @@ class MattermostUploadMessages:
                 f'Mattermost API Error (users). Status code: {response.status_code} Response:{response.text}')
 
     def load_channels(self):
+        response = ''
         params = {
-            "page": 0,  # Номер страницы (начиная с 0)
-            "per_page": self._messages_per_page  # Количество элементов на странице
+            "page": 0,
+            "per_page": self._messages_per_page
         }
         self._channels_list = []
         channels_list = []
@@ -58,7 +59,7 @@ class MattermostUploadMessages:
                 if not channels:
                     break
                 channels_list.extend(channels)
-                params["page"] += 1  # Переходим на следующую страницу
+                params["page"] += 1
             self._logger_bot.info("Mattermost channels loaded (%d)", len(channels_list))
             filtered_channels = []
             for channel in channels_list:
@@ -76,12 +77,19 @@ class MattermostUploadMessages:
         channel_id = self._get_channel_by_name(message_data["channel"])
         user_data = message_data["user"]
         user_id = self._get_user_by_email(user_data)
+        if not self._is_user_in_channel(user_id=user_id, channel_id=channel_id) and \
+                message_data["user"]["user_id"] in message_data["channel"]["channel_members"]:
+            self._add_user_to_channel(user_id=user_id, channel_id=channel_id)
+
         if channel_id is None:
             self._logger_bot.error("Channel %s did`nt find in Mattermost", message_data["channel"]["channel_name"])
             return
 
-        if not self._is_user_in_channel(user_id=user_id, channel_id=channel_id):
-            self._add_user_to_channel(user_id=user_id, channel_id=channel_id)
+        for mention in message_data["users_in_mentions"]:
+            user_mention_id = self._get_user_by_email(mention)
+            if not self._is_user_in_channel(user_id=user_mention_id, channel_id=channel_id) and \
+                    mention in message_data["channel"]["channel_members"]:
+                self._add_user_to_channel(user_id=user_mention_id, channel_id=channel_id)
 
         files_list = []
         self._logger_bot.info("Message is loading to Mattermost")
@@ -104,7 +112,6 @@ class MattermostUploadMessages:
         }
 
         response = self._mm_web_client.mattermost_session.post(f'{self._mm_web_client.mattermost_url}/posts', json=data)
-        post_info = {}
         if response.status_code == 201:
             post_info = response.json()
             self._logger_bot.info("Message loaded to Mattermost")
@@ -170,13 +177,15 @@ class MattermostUploadMessages:
     def _get_user_by_email(self, user_data: dict) -> str:
         user_id = None
         for user in self._users_list:
-            if user["email"] == user_data["user_email"]:
+            mm_mail = user["email"]
+            slack_mail = user_data["user_email"]
+            if mm_mail and slack_mail and mm_mail.lower() == slack_mail.lower():
                 user_id = user["id"]
                 break
 
         if user_id is None and not user_data["user_is_bot"]:
             self._logger_bot.info("user_data: %s", user_data)
-            self._logger_bot.info("users_list: %s", self._users_list)
+            #            self._logger_bot.info("users_list: %s", self._users_list)
             user_id = self._create_user(user_data)
         return user_id
 
@@ -214,7 +223,7 @@ class MattermostUploadMessages:
             "name": channel_data["channel_name"],
             "display_name": channel_data["channel_name"],
             "scheme_id": '',
-            "type": "O",  # "O" для общедоступного канала, "P" для частного
+            "type": "O",
         }
         if channel_data["channel_type"] == "private":
             data["type"] = "P"
@@ -226,7 +235,7 @@ class MattermostUploadMessages:
             channel_id = response_data["id"]
             self._channels_list.append(response_data)
             self._logger_bot.info("Channel %s created", channel_data["channel_name"])
-            self._get_channels_members(channel_id)
+            self._set_channels_members(channel_id)
         else:
             self._logger_bot.error(
                 f'Mattermost API Error (channels). Status code: {response.status_code} Response:{response.text}')
@@ -256,7 +265,7 @@ class MattermostUploadMessages:
             response_date = response.json()
             self._users_list.append(response_date)
             user_id = response_date["id"]
-            self._logger_bot.info("User %s created", user_data["user_name"])
+            self._logger_bot.info("User %s created", self._get_user(user_id))
 
             self._add_user_to_team(user_id=user_id, team_id=self._team_id)
 
@@ -278,13 +287,15 @@ class MattermostUploadMessages:
                 f'Mattermost API Error (teams). Status code: {response.status_code} Response:{response.text}')
 
     def _add_user_to_channel(self, user_id: str, channel_id: str):
+        response = ''
         if user_id is None or channel_id is None:
             return
 
         try:
-            self._logger_bot.info("Started adding user %s to channel %s", user_id, channel_id)
-            self._logger_bot.info("Users data: %s", self._get_user(user_id))
-            self._logger_bot.info("Channels data: %s", self._get_channel(channel_id))
+            self._logger_bot.info("Started adding user %s to channel %s", self._get_user(user_id)["username"],
+                                  self._get_channel(channel_id)["name"])
+            #            self._logger_bot.info("Users data: %s", self._get_user(user_id))
+            #            self._logger_bot.info("Channels data: %s", self._get_channel(channel_id))
             payload = {
                 "user_id": user_id,
             }
@@ -302,7 +313,8 @@ class MattermostUploadMessages:
                     break
                 i += 1
 
-            self._logger_bot.info("User %s added to channel %s", self._get_user(user_id), self._get_channel(channel_id))
+            self._logger_bot.info("User %s added to channel %s", self._get_user(user_id)["username"],
+                                  self._get_channel(channel_id)["name"])
         except Exception as err:
             self._logger_bot.error(
                 f'Mattermost API Error (channels/member). Status code: {response.status_code} Response:{response.text} '
@@ -322,7 +334,7 @@ class MattermostUploadMessages:
             i += 1
 
     def _get_channels_members(self, channel_id: str) -> list:
-
+        response = ''
         channel_members = []
         try:
 
@@ -332,9 +344,10 @@ class MattermostUploadMessages:
             channel_members = response.json()
 
             self._logger_bot.info("Got members of channel %s", self._get_channel(channel_id)["name"])
-        except Exception:
+        except Exception as err:
             self._logger_bot.error(
-                f'Mattermost API Error (channels/members). Status code: {response.status_code} Response:{response.text}')
+                f'Mattermost API Error (channels/members). '
+                f'Status code: {response.status_code} Response:{response.text} Error:{err}')
         return channel_members
 
     def _is_user_in_channel(self, user_id: str, channel_id: str) -> bool:
@@ -347,9 +360,11 @@ class MattermostUploadMessages:
         return is_member
 
     def _add_user_to_team(self, user_id: str, team_id: str):
+        response = ''
         try:
             payload = {
                 "user_id": user_id,
+                "team_id": team_id
             }
 
             response = self._mm_web_client.mattermost_session.post(f'{self._mm_web_client.mattermost_url}'
@@ -357,10 +372,11 @@ class MattermostUploadMessages:
                                                                    json=payload)
             response.raise_for_status()
 
-            self._logger_bot.info("User %s added to team %s", self._get_user(user_id), team_id)
-        except Exception:
+            self._logger_bot.info("User %s added to team %s", self._get_user(user_id)["username"], team_id)
+        except Exception as err:
             self._logger_bot.error(
-                f'Mattermost API Error (teams/members). Status code: {response.status_code} Response:{response.text}')
+                f'Mattermost API Error (teams/members). Status code: {response.status_code} Response:{response.text}'
+                f'Error:{err}')
 
     def set_channel_filter(self, channel_filter):
         if len(channel_filter) != 0 and channel_filter != 'all':

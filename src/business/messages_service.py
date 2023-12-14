@@ -15,6 +15,9 @@ class MessagesService:
         user_id = message["user"]
         if not self._config_service.is_allowed_user(self._find_user_name_by_key(user_id)):
             return
+
+        users_mentions = self._extract_users_from_message(message["text"])
+
         message["text"] = self.replace_mentions(message["text"])
 
         message_dict = {"text": message["text"],
@@ -28,31 +31,33 @@ class MessagesService:
                             "user_is_deleted": self._users_list.get(message["user"], {}).get("is_deleted"),
                             "user_display_name": self._users_list.get(message["user"], {}).get("display_name")},
 
+
                         "channel":
                             {"channel_id": message["channel"],
                              "channel_name": self._channels_list.get(message["channel"], {}).get("name"),
-                             "channel_type": self._channels_list.get(message["channel"], {}).get("type")},
+                             "channel_type": self._channels_list.get(message["channel"], {}).get("type"),
+                             "channel_members": self._channels_list.get(message["channel"], {}).get("members")},
 
                         "ts": message["ts"], "is_attached": message["is_attached"],
                         "is_thread": message["is_thread"]}
 
         if "attachments" in message:
-            #            if message["attachments"][0]["author_id"] != user_id:
             if len(message_dict["text"]) > 0:
                 message_dict["text"] = message_dict["text"] + '\n'
 
             attachments = message["attachments"]
-
+            users_mentions = []
             for attachment in attachments:
+                users_mentions.extend(self._extract_users_from_message(message["text"]))
                 if "author_id" in attachment:
+
                     message_dict["text"] = message_dict["text"] + \
                                            f'>>> <@{attachment["author_id"]}> ' \
                                            f'{attachment["text"]} \n'
                     message_dict["text"] = self.replace_mentions(message_dict["text"])
                 else:
                     self._logger_bot.info("Message without author_id: %s", attachment)
-                    message_dict["text"] = message_dict["text"] + \
-                                           f'>>> {attachment["fallback"]} '
+                    message_dict["text"] = message_dict["text"] + f'>>> {attachment["fallback"]} '
                     message_dict["text"] = self.replace_mentions(message_dict["text"])
 
         if message_dict["is_attached"]:
@@ -61,6 +66,7 @@ class MessagesService:
         if message_dict["is_thread"]:
             reply_list = []
             for reply_message in message["reply"]:
+                users_mentions.extend(self._extract_users_from_message(reply_message["text"]))
                 reply_dict = {"text": self.replace_mentions(reply_message["text"]), "user_id": reply_message["user"],
                               "user":
                                   {
@@ -81,16 +87,37 @@ class MessagesService:
                                    "channel_name": self._channels_list.get(message["channel"], {}).get("name"),
                                    "channel_type": self._channels_list.get(message["channel"], {}).get("type")},
                               "ts": reply_message["ts"], "is_attached": False,
-                              "is_thread": True}
+                              "is_thread": True
+                              }
                 if "files" in reply_message:
                     reply_dict["files"] = reply_message["files"]
                 reply_list.append(reply_dict)
             message_dict["reply"] = reply_list
         message_dict["text"] = self._add_timestamp_to_text(message_dict["text"], message_dict["ts"])
+        users_mentions_list = []
+        for mention in users_mentions:
+            users_mentions_dict = {
+                "user_id": mention,
+                "user_name": self._users_list.get(mention, {}).get("name"),
+                "user_email": self._users_list.get(mention, {}).get("email"),
+                "user_is_bot": self._users_list.get(mention, {}).get("is_bot"),
+                "user_first_name": self._users_list.get(mention, {}).get("first_name"),
+                "user_last_name": self._users_list.get(mention, {}).get("last_name"),
+                "user_is_deleted": self._users_list.get(mention, {}).get("is_deleted"),
+                "user_display_name": self._users_list.get(mention, {}).get("display_name")}
+
+            users_mentions_list.append(users_mentions_dict)
+
+        message_dict["users_in_mentions"] = users_mentions_list
+
         self.mm_upload_msg.upload_messages(message_dict)
 
     def _find_user_name_by_key(self, key) -> str:
         return self._users_list.get(key)
+
+    def _get_user_item(self, user_id: str) -> dict:
+        user_dict = self._users_list.get(user_id)
+        return user_dict
 
     def get_users_list(self) -> dict:
         return self._users_list
@@ -118,46 +145,60 @@ class MessagesService:
     def replace_channel_function(self, match) -> str:
         matched_text = match.group(0)
         matched_text = matched_text[2:matched_text.find('|')]
+        channel_name = ''
         channel_data = self._channels_list.get(matched_text)
-        channel_name = channel_data["name"]
+        if channel_data:
+            channel_name = channel_data["name"]
         if channel_name == '' or channel_name is None:
             channel_name = match.group(0)
         else:
-            channel_name = "~" + channel_data["name"]
+            channel_name = "~" + channel_name
         return channel_name
 
     def replace_mentions(self, msg_text: str) -> str:
 
+        replaced_message = msg_text
         pattern = r'<@[\w\d]+>'
         regex = re.compile(pattern)
-        match = re.search(regex, msg_text)
+        match = re.search(regex, replaced_message)
         if match:
-            return re.sub(pattern, self.replace_user_function, msg_text)
+            replaced_message = re.sub(pattern, self.replace_user_function, replaced_message)
 
-        pattern = r'<#([\w\d]+)\|([\w\d]+)?>'
+        pattern = r'<#([\w\d]+)\|(.*?)>'
         regex = re.compile(pattern)
-        match = re.search(regex, msg_text)
+        match = re.search(regex, replaced_message)
         if match:
-            return re.sub(pattern, self.replace_channel_function, msg_text)
+            replaced_message = re.sub(pattern, self.replace_channel_function, replaced_message)
 
         pattern = r'<!here>'
         regex = re.compile(pattern)
-        match = re.search(regex, msg_text)
+        match = re.search(regex, replaced_message)
         if match:
-            return re.sub(pattern, "@here", msg_text)
+            replaced_message = re.sub(pattern, "@here", replaced_message)
 
         pattern = r'<!channel>'
         regex = re.compile(pattern)
-        match = re.search(regex, msg_text)
-        if not match:
-            return msg_text
-        else:
-            return re.sub(pattern, "@channel", msg_text)
+        match = re.search(regex, replaced_message)
+        if match:
+            replaced_message = re.sub(pattern, "@channel", replaced_message)
+        return replaced_message
 
     def _add_timestamp_to_text(self, msg_text: str, timestamp: float) -> str:
         msg_with_ts = msg_text
         if msg_with_ts != "" and msg_with_ts is not None:
-            msg_with_ts = msg_with_ts + f'\n\n slack_ts: {datetime.fromtimestamp(float(timestamp)).strftime("%Y-%m-%d %H:%M:%S")}'
+            msg_with_ts = msg_with_ts + f'\n\n slack_ts: ' \
+                                        f'{datetime.fromtimestamp(float(timestamp)).strftime("%Y-%m-%d %H:%M:%S")}'
         else:
-            msg_with_ts = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+            msg_with_ts = " slack_ts:" + datetime.fromtimestamp(float(timestamp)).strftime("%Y-%m-%d %H:%M:%S")
         return msg_with_ts
+
+    def _extract_users_from_message(self, msg_txt) -> list:
+        users_mentions = []
+        pattern = r'<@[\w\d]+>'
+        regex = re.compile(pattern)
+        matches = regex.findall(msg_txt)
+
+        for match in matches:
+            users_mentions.append(match[2:len(match) - 1])
+
+        return users_mentions

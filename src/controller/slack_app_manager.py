@@ -5,6 +5,7 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 from src.controller.config_dto_schema import ConfigDTOSchema
 import logging
 from src.util.settings_parser import SettingsParser
+from datetime import datetime
 
 
 class SlackAppManager:
@@ -82,7 +83,8 @@ class SlackAppManager:
         self.logger_bot.info("Date setting started")
         if len(command_params) != 0:
             self.logger_bot.info("Got command option - %s", command_params)
-        new_config_entity = self._config_service.set_start_date(command_params)
+        new_config_entity = self._config_service.set_last_synchronize_date_unix(
+            datetime.strptime(command_params, "%Y-%m-%d %H:%M:%S").timestamp())
         config_schema = ConfigDTOSchema()
         config_json = config_schema.dump(obj=new_config_entity)
         self.logger_bot.info("Date setting finished")
@@ -97,6 +99,7 @@ class SlackAppManager:
             self.logger_bot.info("Transfer messages is canceled: no params")
             respond("Transfer messages is canceled: no params")
             return
+        respond("Transfer messages started")
         self.logger_bot.info("Transfer messages started")
 
         self._load_messages.set_channel_filter(command_params)
