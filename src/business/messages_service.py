@@ -113,7 +113,7 @@ class MessagesService:
         self.mm_upload_msg.upload_messages(message_dict)
 
     def _find_user_name_by_key(self, key) -> str:
-        return self._users_list.get(key)
+        return self._users_list.get(key)["name"]
 
     def _get_user_item(self, user_id: str) -> dict:
         user_dict = self._users_list.get(user_id)
@@ -155,6 +155,16 @@ class MessagesService:
             channel_name = "~" + channel_name
         return channel_name
 
+    def replace_link_function(self, match) -> str:
+        replaced_text: str = ""
+        matched_text = match.group(0)
+        link = matched_text[2:matched_text.find('|')]
+        link_description =  matched_text[matched_text.find('|')+1:matched_text.find('>')]
+        if not link or not link_description:
+            replaced_text = match.group(0)
+        replaced_text = f'[{link_description}]({link})'
+        return replaced_text
+
     def replace_mentions(self, msg_text: str) -> str:
 
         replaced_message = msg_text
@@ -181,6 +191,13 @@ class MessagesService:
         match = re.search(regex, replaced_message)
         if match:
             replaced_message = re.sub(pattern, "@channel", replaced_message)
+
+        pattern = r'<([\w\S\d]+)(\|)([\w\S\d]+)>'
+        regex = re.compile(pattern)
+        match = re.search(regex, replaced_message)
+        if match:
+            replaced_message = re.sub(pattern, self.replace_link_function, replaced_message)
+
         return replaced_message
 
     def _add_timestamp_to_text(self, msg_text: str, timestamp: float) -> str:

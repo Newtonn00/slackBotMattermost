@@ -15,7 +15,7 @@ class SlackLoadMessages:
     CREATED = 201
     OK = 200
 
-    def __init__(self, web_client, config_service, messages_service, mattermost_upload_messages):
+    def __init__(self, web_client, config_service, messages_service, pin_service, bookmark_service):
         settings = SettingsParser()
 
         self._logger_bot = logging.getLogger("")
@@ -25,7 +25,9 @@ class SlackLoadMessages:
         self._slack_token = settings.slack_bot_token
         self._config_service = config_service
         self._messages_service = messages_service
-        self._mattermost_upload_messages = mattermost_upload_messages
+        self._pin_service = pin_service
+        self._bookmark_service = bookmark_service
+
         self._messages_per_page = 100
         self._channel_filter = []
 
@@ -35,6 +37,9 @@ class SlackLoadMessages:
         self.load_users()
         self._messages_service.set_users_list(self._users_list)
         self._messages_service.set_channels_list(self._channels_list)
+        self._pin_service.set_slack_channels_list(self._channels_list)
+        self._bookmark_service.set_slack_channels_list(self._channels_list)
+
         self._logger_bot.info("Loading messages from public and private channels")
         for channel_id, channel_item in self._channels_list.items():
             if self._is_selected_channel(channel_item["name"]) and self._config_service.is_allowed_channel(

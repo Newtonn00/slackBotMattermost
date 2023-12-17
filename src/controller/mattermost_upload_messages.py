@@ -397,3 +397,6 @@ class MattermostUploadMessages:
                 is_channel_selected = True
 
         return is_channel_selected
+
+    def get_channel_list(self) -> list:
+        return self._channels_list

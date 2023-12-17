@@ -9,7 +9,7 @@ from datetime import datetime
 
 
 class SlackAppManager:
-    def __init__(self, config_service, slack_load_messages, mattermost_upload_messages):
+    def __init__(self, config_service, slack_load_messages, mattermost_upload_messages, pin_service, bookmark_service):
         self.logger_bot = logging.getLogger("")
 
         self._mattermost_upload_messages_id = None
@@ -31,6 +31,8 @@ class SlackAppManager:
         self._set_date_sync_command = settings.set_date_sync_command
         self._start_integration_command = settings.start_integration_command
         self._mattermost_upload_messages = mattermost_upload_messages
+        self._pin_service = pin_service
+        self._bookmark_service = bookmark_service
         self.register_commands()
 
         @self.flask_app.route("/slack/events", methods=["POST"])
@@ -104,10 +106,17 @@ class SlackAppManager:
 
         self._load_messages.set_channel_filter(command_params)
         self._mattermost_upload_messages.set_channel_filter(command_params)
+        self._pin_service.set_channel_filter(command_params)
+        self._bookmark_service.set_channel_filter(command_params)
+
         self._mattermost_upload_messages.load_users()
         self._mattermost_upload_messages.load_channels()
         self._mattermost_upload_messages.load_team_id()
+
         self._load_messages.load_channel_messages()
+        self._pin_service.pins_process()
+        self._bookmark_service.bookmarks_process()
+
         self.logger_bot.info("Transfer messages finished")
 
         respond("Transfer messages finished")
