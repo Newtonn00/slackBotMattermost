@@ -62,7 +62,8 @@ class SlackLoadPins:
                               channel_id)
 
         pin_entity: List[PinEntity] = []
-        for message in pinned_messages["items"]:
-            pin_entity.append(self._map_dict_to_pin_entity(message))
+        if "items" in pinned_messages:
+            for message in pinned_messages["items"]:
+                pin_entity.append(self._map_dict_to_pin_entity(message))
 
         return pin_entity

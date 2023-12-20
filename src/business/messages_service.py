@@ -11,6 +11,57 @@ class MessagesService:
         self._config_service = config_service
         self.mm_upload_msg = mattermost_upload_messages
 
+    def save_reply_to_mattermost(self, message: dict):
+        user_id = message["user"]
+        if not self._config_service.is_allowed_user(self._find_user_name_by_key(user_id)):
+            return
+
+        users_mentions = self._extract_users_from_message(message["text"])
+
+        message["text"] = self.replace_mentions(message["text"])
+
+        message_dict = {"text": message["text"],
+                        "user": {
+                            "user_id": message["user"],
+                            "user_name": self._users_list.get(message["user"], {}).get("name"),
+                            "user_title": self._users_list.get(message["user"], {}).get("title"),
+                            "user_email": self._users_list.get(message["user"], {}).get("email"),
+                            "user_is_bot": self._users_list.get(message["user"], {}).get("is_bot"),
+                            "user_first_name": self._users_list.get(message["user"], {}).get("first_name"),
+                            "user_last_name": self._users_list.get(message["user"], {}).get("last_name"),
+                            "user_is_deleted": self._users_list.get(message["user"], {}).get("is_deleted"),
+                            "user_display_name": self._users_list.get(message["user"], {}).get("display_name")},
+
+
+                        "channel":
+                            {"channel_id": message["channel"],
+                             "channel_name": self._channels_list.get(message["channel"], {}).get("name"),
+                             "channel_type": self._channels_list.get(message["channel"], {}).get("type"),
+                             "channel_members": self._channels_list.get(message["channel"], {}).get("members")},
+
+                        "mm_post_id": message["post_id"],
+                        "ts": message["ts"], "is_attached": False,
+                        "is_thread": False}
+
+        message_dict["text"] = self._add_timestamp_to_text(message_dict["text"], message_dict["ts"])
+        users_mentions_list = []
+        for mention in users_mentions:
+            users_mentions_dict = {
+                "user_id": mention,
+                "user_name": self._users_list.get(mention, {}).get("name"),
+                "user_email": self._users_list.get(mention, {}).get("email"),
+                "user_is_bot": self._users_list.get(mention, {}).get("is_bot"),
+                "user_first_name": self._users_list.get(mention, {}).get("first_name"),
+                "user_last_name": self._users_list.get(mention, {}).get("last_name"),
+                "user_is_deleted": self._users_list.get(mention, {}).get("is_deleted"),
+                "user_display_name": self._users_list.get(mention, {}).get("display_name")}
+
+            users_mentions_list.append(users_mentions_dict)
+
+        message_dict["users_in_mentions"] = users_mentions_list
+
+        self.mm_upload_msg.upload_messages(message_dict)
+
     def save_messages_to_dict(self, message: dict):
         user_id = message["user"]
         if not self._config_service.is_allowed_user(self._find_user_name_by_key(user_id)):
@@ -37,7 +88,7 @@ class MessagesService:
                              "channel_name": self._channels_list.get(message["channel"], {}).get("name"),
                              "channel_type": self._channels_list.get(message["channel"], {}).get("type"),
                              "channel_members": self._channels_list.get(message["channel"], {}).get("members")},
-
+                        "mm_post_id": message["post_id"],
                         "ts": message["ts"], "is_attached": message["is_attached"],
                         "is_thread": message["is_thread"]}
 
@@ -86,6 +137,7 @@ class MessagesService:
                                   {"channel_id": message["channel"],
                                    "channel_name": self._channels_list.get(message["channel"], {}).get("name"),
                                    "channel_type": self._channels_list.get(message["channel"], {}).get("type")},
+                              "mm_post_id": message["post_id"],
                               "ts": reply_message["ts"], "is_attached": False,
                               "is_thread": True
                               }

@@ -9,10 +9,11 @@ class PinService:
     _mm_channels_list: list
     _slack_load_pins = None
 
-    def __init__(self, slack_load_pins, mattermost_upload_pins, mattermost_upload_messages):
+    def __init__(self, slack_load_pins, mattermost_upload_pins, mattermost_upload_messages, mattermost_messages):
         self._slack_load_pins = slack_load_pins
         self._mattermost_pins = mattermost_upload_pins
         self._mattermost_upload_messages = mattermost_upload_messages
+        self._mattermost_messages = mattermost_messages
         self._channel_filter = []
 
     def set_slack_channels_list(self, channels_list):
@@ -52,12 +53,13 @@ class PinService:
                     messages_for_pin.append(slack_pin)
 
             if messages_for_pin:
-                messages_dict = self._mattermost_pins.load_messages(mm_channel_id)
+                messages_dict = self._mattermost_messages.load_messages(mm_channel_id)
                 for pin in messages_for_pin:
 
                     post_id = self._mattermost_pins.get_message_id_by_ts(messages_dict, pin.message_ts)
 
-                    self._mattermost_pins.pin(post_id)
+                    if post_id:
+                        self._mattermost_pins.pin(post_id)
 
     def _get_pins(self, channel_id) -> List[PinEntity]:
         pin_list = self._slack_load_pins.load_pins(channel_id=channel_id)

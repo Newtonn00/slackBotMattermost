@@ -75,35 +75,6 @@ class MattermostPins:
             self._logger_bot.error(
                 f'Mattermost API Error (posts/pin). Status code: {response.status_code} Response:{response.text}')
 
-    def load_messages(self, channel_id) -> dict:
-        messages_dict = {}
-        response = ''
-        params = {
-            "page": 0,
-            "per_page": self._messages_per_page
-        }
-        try:
-            while True:
-                response = self._mm_web_client.mattermost_session.get(
-                    f'{self._mm_web_client.mattermost_url}/channels/{channel_id}/posts',
-                    params=params)
-                response.raise_for_status()
-                messages = response.json()["posts"]
-
-                if not messages:
-                    break
-
-                messages_dict.update(messages)
-                params["page"] += 1
-
-            self._logger_bot.info("Mattermost messages loaded (%d)", len(messages_dict))
-
-        except HTTPError as err:
-            self._logger_bot.error(
-                f'Mattermost API Error (channels/posts). Status code: {response.status_code} '
-                f'Response:{response.text} Error:{err}')
-        return messages_dict
-
     def get_message_id_by_ts(self, messages_dict: dict, ts: str) -> str:
         post_id = ''
         for message_id, message in messages_dict.items():

@@ -70,5 +70,10 @@ class ConfigService:
 
         return oldest_datetime.timestamp()
 
+    def get_all_last_synchronize_date_unix(self) -> list:
+        config_entity: ConfigEntity = self._config_repo.read_config()
+
+        return config_entity.last_datetime_synchronize
+
 
 

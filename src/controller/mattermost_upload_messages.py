@@ -99,6 +99,7 @@ class MattermostUploadMessages:
         data = {
             "channel_id": channel_id,
             "message": message_data["text"],
+            "root_id": message_data["mm_post_id"],
             "props": {"from_webhook": "true",
                       "override_username": message_data["user"]["user_display_name"],
                       "username": message_data["user"]["user_display_name"],
@@ -252,6 +253,7 @@ class MattermostUploadMessages:
             "display_name": user_data["user_display_name"],
             "nickname": user_data["user_display_name"],
             "scheme_id": '',
+            "position": user_data["title"],
             "email": user_data["user_email"],
             "first_name": user_data["user_first_name"],
             "last_name": user_data["user_last_name"],

@@ -15,7 +15,7 @@ class SlackLoadMessages:
     CREATED = 201
     OK = 200
 
-    def __init__(self, web_client, config_service, messages_service, pin_service, bookmark_service):
+    def __init__(self, web_client, config_service, messages_service, pin_service, bookmark_service, thread_service):
         settings = SettingsParser()
 
         self._logger_bot = logging.getLogger("")
@@ -27,7 +27,7 @@ class SlackLoadMessages:
         self._messages_service = messages_service
         self._pin_service = pin_service
         self._bookmark_service = bookmark_service
-
+        self._thread_service = thread_service
         self._messages_per_page = 100
         self._channel_filter = []
 
@@ -39,6 +39,7 @@ class SlackLoadMessages:
         self._messages_service.set_channels_list(self._channels_list)
         self._pin_service.set_slack_channels_list(self._channels_list)
         self._bookmark_service.set_slack_channels_list(self._channels_list)
+        self._thread_service.set_slack_channels_list(self._channels_list)
 
         self._logger_bot.info("Loading messages from public and private channels")
         for channel_id, channel_item in self._channels_list.items():
@@ -94,7 +95,7 @@ class SlackLoadMessages:
                 for message in messages:
                     message["is_thread"] = False
                     if "reply_users" in message:
-                        message["reply"] = self._load_threads(channel_id=channel_item["id"], oldest_date=oldest_date,
+                        message["reply"] = self.load_threads(channel_id=channel_item["id"], oldest_date=oldest_date,
                                                               ts_of_parent_message=message["ts"])
                         message["is_thread"] = True
                     message["channel"] = channel_item["id"]
@@ -134,7 +135,7 @@ class SlackLoadMessages:
                     self._config_service.set_last_synchronize_date_unix(new_start_date,
                                                                         channel_name=channel_item["name"])
 
-    def _load_threads(self, channel_id, ts_of_parent_message, oldest_date) -> list:
+    def load_threads(self, channel_id, ts_of_parent_message, oldest_date) -> list:
         try:
             response = self._web_client.conversations_replies(
                 channel=channel_id,
@@ -187,6 +188,7 @@ class SlackLoadMessages:
         for user in user_list:
             user_id = user.get("id")
             user_name = user.get("name")
+            user_title = user.get("title")
             user_display_name = user["profile"].get("display_name")
             if user_display_name == "" or user_display_name is None:
                 user_display_name = user.get("real_name")
@@ -197,7 +199,7 @@ class SlackLoadMessages:
             user_first_name = user["profile"].get("first_name")
             user_last_name = user["profile"].get("last_name")
             user_is_deleted = user.get("deleted")
-            users[user["id"]] = {"id": user_id, "name": user_name, "email": user_email, "is_bot": user_is_bot,
+            users[user["id"]] = {"id": user_id, "name": user_name, "title": user_title, "email": user_email, "is_bot": user_is_bot,
                                  "is_deleted": user_is_deleted, "first_name": user_first_name,
                                  "last_name": user_last_name, "display_name": user_display_name}
 

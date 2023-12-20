@@ -7,4 +7,6 @@ class SlackWebClient:
     def __init__(self):
         settings = SettingsParser()
 
-        self.slack_web_client = WebClient(settings.slack_bot_token)
+        self.slack_bot_token = settings.slack_bot_token
+        self.slack_web_client = WebClient(self.slack_bot_token)
+
