@@ -23,23 +23,38 @@ class ThreadService:
             mm_channel_id = self._get_mm_channel_id_by_name(channel_item["name"])["id"]
             date_for_selection_messages = int((datetime.now() - timedelta(days=90)).timestamp())
             mm_messages_dict = self._mattermost_messages.load_messages(mm_channel_id)
+            slack_ts_set = self._get_set_slack_ts(mm_messages_dict)
             slack_thread_timestamps = {}
             last_date_sync_unix = datetime.strptime(self._last_sync_date.get(channel_item["name"],
                                                                              {self._last_sync_date.get("all",
                                                                                                        "1970-01-01 00:00:00")}),
-                                                    "%Y-%m-%d %H:%M:%S")
+                                                    "%Y-%m-%d %H:%M:%S").timestamp()
+            new_last_date_sync_unix = last_date_sync_unix
             if mm_messages_dict:
                 slack_thread_timestamps = self._get_slack_thread_timestamps(mm_messages_dict,
-                                                                            int(last_date_sync_unix.timestamp()))
+                                                                            int(last_date_sync_unix))
 
             for mm_post_id, slack_message_ts in slack_thread_timestamps.items():
                 reply_messages = self._slack_load_thread_replies(channel_key, slack_message_ts,
-                                                                      int(last_date_sync_unix.timestamp()))
+                                                                      int(last_date_sync_unix))
 
                 for message in reply_messages:
-                    message["post_id"] = mm_post_id
-                    message["channel"] = channel_key
-                    self._upload_message_to_mattermost(message)
+
+                    if message["ts"] not in slack_ts_set:
+
+                        slack_ts_set.add(message["ts"])
+                        if "files" in message:
+                            files_list = self._slack_messages_handler.download_files(message["files"])
+                            message["files"] = files_list
+
+                        message["post_id"] = mm_post_id
+                        message["channel"] = channel_key
+                        if "files" in message:
+                            message["is_attached"] = True
+                        else:
+                            message["is_attached"] = False
+                        self._upload_message_to_mattermost(message)
+
 
     def _upload_message_to_mattermost(self, message: dict):
         self._message_service.save_reply_to_mattermost(message)
@@ -100,3 +115,11 @@ class ThreadService:
             if channel["name"] in self._channel_filter:
                 filtered_channels.append(channel)
         self._mm_channels_list = filtered_channels
+
+    def _get_set_slack_ts(self, messages_data:dict) -> set:
+        slack_ts_set = set()
+        for message_id, message in messages_data.items():
+            if "props" in message and "slack_ts" in message["props"]:
+                slack_ts_set.add(message["props"]["slack_ts"])
+        return slack_ts_set
+

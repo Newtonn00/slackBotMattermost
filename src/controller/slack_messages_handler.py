@@ -33,16 +33,11 @@ class SlackMessagesHandler:
         except SlackApiError as e:
             self._logger_bot.error(f"SlackAPIError (conversations_replies): {e.response['error']}")
             return []
-        thread_messages = []
-        for reply in reply_messages:
-            if "files" in reply:
-                files_list = self._download_files(reply["files"])
-                reply["files"] = files_list
-            thread_messages.append(reply)
 
-        return thread_messages
 
-    def _download_files(self, files_attach: list) -> list:
+        return reply_messages
+
+    def download_files(self, files_attach: list) -> list:
         files_list = []
         for files in files_attach:
             if "url_private_download" not in files:
@@ -50,7 +45,7 @@ class SlackMessagesHandler:
             self._logger_bot.info(f'{files["name"]} is downloading')
             response_file = requests.get(files["url_private_download"],
                                          headers={
-                                             'Authorization': 'Bearer %s' % self._slack_token})
+                                             'Authorization': 'Bearer %s' % self._slack_bot_token})
             if response_file.status_code == 200:
                 local_file_path = os.environ.get('WORKDIR') + "/" + files["name"]
 

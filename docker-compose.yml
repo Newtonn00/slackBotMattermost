@@ -1,11 +1,28 @@
 version: "3.5"
+
+#docker build --platform=linux/amd64 -t newtonn2211/slackbotmattermost-slack_bot_service_amd64:latest .
+#docker push newtonn2211/slackbotmattermost-slack_bot_service_amd64
+
 services:
+
+  # nginx service
+#  web:
+#    container_name: "web"
+#    image: nginx:alpine
+#    depends_on:
+#      - slack_bot_service
+#    ports:
+#      - "8082:80"
+#    volumes:
+#      - ./nginx:/etc/nginx/conf.d
+#    networks:
+#      - custom
+
   slack_bot_service:
     #image: newtonn2211/slackbotmattermost-slack_bot_service:latest
     build:
       context: ./
       dockerfile: Dockerfile
-      network: default
 
     ports:
       - "3005:3005"
@@ -23,6 +40,8 @@ services:
     deploy:
       replicas: 1
     image: newtonn2211/slackbotmattermost-slack_bot_service:latest
-
+    networks:
+      - custom
 networks:
- default:
+ custom:
+   driver: bridge

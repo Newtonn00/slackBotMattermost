@@ -14,6 +14,7 @@ class SettingsParser:
     set_excluded_users_command: str
     set_date_sync_command: str
     start_integration_command: str
+    sync_users_command: str
     config_file: str
     log_file: str
 
@@ -100,13 +101,20 @@ class SettingsParser:
         else:
             self.start_integration_command = os.environ.get('START_INTEGRATION_COMMAND')
 
+        if (os.environ.get('SYNC_USERS_COMMAND') == '' or os.environ.get(
+                'SYNC_USERS_COMMAND') is None) and _settings_file_exists \
+                and config.has_option('slack', 'sync_users_command'):
+            self.sync_users_command = config['slack']['sync_users_command']
+        else:
+            self.sync_users_command = os.environ.get('SYNC_USERS_COMMAND')
+
         if (os.environ.get('LOG_FILE') == '' or os.environ.get(
                 'LOG_FILE') is None) and _settings_file_exists and config.has_option('config', 'log_file'):
             self.log_file = os.environ.get('WORKDIR') + '/log/' + config['config']['log_file']
         else:
             self.log_file = os.environ.get('WORKDIR') + '/log/' + os.environ.get('LOG_FILE')
 
-        if (self.slack_bot_token == '' or self.slack_bot_token is None) or (
+        if ((self.slack_bot_token == '' or self.slack_bot_token is None) or (
                 self.slack_app_token == '' or self.slack_app_token is None) \
                 or (self.mattermost_bot_token == '' or self.mattermost_bot_token is None) or (
                 self.mattermost_url == '' or self.mattermost_url is None) or (
@@ -117,5 +125,6 @@ class SettingsParser:
                 or (self.set_excluded_users_command == '' or self.set_excluded_users_command is None) \
                 or (self.get_config_command == '' or self.get_config_command is None) \
                 or (self.start_integration_command == '' or self.start_integration_command is None)\
-                or( self.log_file == '' or self.log_file is None):
+                or (self.log_file == '' or self.log_file is None)
+                or (self.sync_users_command == '' or self.sync_users_command is None)):
             raise SettingsError()

@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from datetime import datetime
 
@@ -40,8 +41,11 @@ class MessagesService:
                              "channel_members": self._channels_list.get(message["channel"], {}).get("members")},
 
                         "mm_post_id": message["post_id"],
-                        "ts": message["ts"], "is_attached": False,
+                        "ts": message["ts"], "is_attached": message["is_attached"],
                         "is_thread": False}
+
+        if message_dict["is_attached"]:
+            message_dict["files"] = message["files"]
 
         message_dict["text"] = self._add_timestamp_to_text(message_dict["text"], message_dict["ts"])
         users_mentions_list = []
@@ -61,6 +65,8 @@ class MessagesService:
         message_dict["users_in_mentions"] = users_mentions_list
 
         self.mm_upload_msg.upload_messages(message_dict)
+        if message_dict["is_attached"]:
+            self._delete_file(message_dict["files"])
 
     def save_messages_to_dict(self, message: dict):
         user_id = message["user"]
@@ -88,7 +94,7 @@ class MessagesService:
                              "channel_name": self._channels_list.get(message["channel"], {}).get("name"),
                              "channel_type": self._channels_list.get(message["channel"], {}).get("type"),
                              "channel_members": self._channels_list.get(message["channel"], {}).get("members")},
-                        "mm_post_id": message["post_id"],
+                        "mm_post_id": "",
                         "ts": message["ts"], "is_attached": message["is_attached"],
                         "is_thread": message["is_thread"]}
 
@@ -137,7 +143,7 @@ class MessagesService:
                                   {"channel_id": message["channel"],
                                    "channel_name": self._channels_list.get(message["channel"], {}).get("name"),
                                    "channel_type": self._channels_list.get(message["channel"], {}).get("type")},
-                              "mm_post_id": message["post_id"],
+                              "mm_post_id": "",
                               "ts": reply_message["ts"], "is_attached": False,
                               "is_thread": True
                               }
@@ -271,3 +277,11 @@ class MessagesService:
             users_mentions.append(match[2:len(match) - 1])
 
         return users_mentions
+
+    def _delete_file(self, files: list):
+        for file in files:
+            if os.path.exists(file["file_path"]):
+                os.remove(file["file_path"])
+                self._logger_bot.info("Deleted file %s from %s", file["file_name"],
+                                      file["file_path"])
+
