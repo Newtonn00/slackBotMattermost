@@ -1,6 +1,8 @@
+import logging
 from typing import List
 
 from src.entity.pin_entity import PinEntity
+from src.util.common_counter import CommonCounter
 
 
 class PinService:
@@ -15,6 +17,7 @@ class PinService:
         self._mattermost_upload_messages = mattermost_upload_messages
         self._mattermost_messages = mattermost_messages
         self._channel_filter = []
+        self._logger_bot = logging.getLogger("")
 
     def set_slack_channels_list(self, channels_list):
         self._slack_channels_list = channels_list
@@ -30,7 +33,14 @@ class PinService:
         for channel_key, channel_item in self._slack_channels_list.items():
             mm_pin_list: List[PinEntity]
             slack_pin_list = self._get_pins(channel_key)
-            mm_channel_id = self._get_mm_channel_id_by_name(channel_item["name"])["id"]
+            mm_channel_item = self._get_mm_channel_id_by_name(channel_item["name"])
+            if mm_channel_item:
+                mm_channel_id = mm_channel_item.get("id")
+            else:
+                self._logger_bot.info(f'Channel {channel_item["name"]} not found in Mattermost')
+                CommonCounter.increment_error()
+                break
+
             for pin in slack_pin_list:
                 pin.mm_channel_id = mm_channel_id
 
@@ -68,7 +78,7 @@ class PinService:
     def _get_mm_channel_id_by_name(self, channel_name: str) -> dict:
         mm_channel: dict = {}
         for channel in self._mm_channels_list:
-            if channel["name"] == channel_name:
+            if channel["name"] == channel_name or (channel["display_name"] == channel_name):
                 mm_channel = channel
                 break
         return mm_channel

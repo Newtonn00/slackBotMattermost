@@ -2,6 +2,8 @@ import logging
 
 from requests import HTTPError
 
+from src.util.common_counter import CommonCounter
+
 
 class MattermostMessages:
     def __init__(self, mattermost_web_client):
@@ -32,10 +34,13 @@ class MattermostMessages:
                 messages_dict.update(messages)
                 params["page"] += 1
 
-            self._logger_bot.info("Mattermost messages loaded (%d)", len(messages_dict))
+
+            if messages:
+                self._logger_bot.info("Mattermost messages loaded (%d)", len(messages_dict))
 
         except HTTPError as err:
             self._logger_bot.error(
                 f'Mattermost API Error (channels/posts). Status code: {response.status_code} '
                 f'Response:{response.text} Error:{err}')
+            CommonCounter.increment_error()
         return messages_dict

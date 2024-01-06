@@ -5,6 +5,8 @@ import time
 import requests
 from slack_sdk.errors import SlackApiError
 
+from src.util.common_counter import CommonCounter
+
 
 class SlackUsersHandler:
     REQUEST_TIME_OUT = 408
@@ -45,6 +47,7 @@ class SlackUsersHandler:
 
         except SlackApiError as e:
             self._logger_bot.error(f"SlackAPIError (users_list): {e.response['error']}")
+            CommonCounter.increment_error()
             return []
         self._logger_bot.info("Slack users loaded (%d)", len(user_list))
         return user_list
@@ -64,8 +67,10 @@ class SlackUsersHandler:
                     f'File is downloaded to {local_file_path}')
             except Exception:
                 self._logger_bot.error("Error in downloading as local file")
+                CommonCounter.increment_error()
         else:
             self._logger_bot.error(f'SlackAPIError (files): {response_file.json()}')
+            CommonCounter.increment_error()
 
         return local_file_path
 

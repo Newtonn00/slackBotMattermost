@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Подставьте ваши данные для подключения к удаленному серверу
-REMOTE_SERVER="45.9.40.179"
+REMOTE_SERVER="178.20.40.136"
 REMOTE_USER="root"
-DIRECTORY="mm"
+DIRECTORY="slack_mattermost"
 
 # Шаг 1: Заходить на удаленный сервер по SSH
 ssh "$REMOTE_USER@$REMOTE_SERVER" << EOF
@@ -14,5 +14,6 @@ ssh "$REMOTE_USER@$REMOTE_SERVER" << EOF
   docker stop web slack_mattermost_slack_bot_service_1
 
   # Шаг 4: Запуск команды docker-compose up
-  docker-compose up -d
+  docker-compose pull
+    docker-compose up -d
 EOF

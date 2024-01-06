@@ -13,25 +13,29 @@ class MessagesService:
         self.mm_upload_msg = mattermost_upload_messages
 
     def save_reply_to_mattermost(self, message: dict):
-        user_id = message["user"]
+        if "user" not in message:
+            self._logger_bot.info(message)
+            user_id = message["bot_id"]
+        else:
+            user_id = message["user"]
         if not self._config_service.is_allowed_user(self._find_user_name_by_key(user_id)):
             return
-
+        user_dict = self._get_user_item(user_id)
         users_mentions = self._extract_users_from_message(message["text"])
 
         message["text"] = self.replace_mentions(message["text"])
 
         message_dict = {"text": message["text"],
                         "user": {
-                            "user_id": message["user"],
-                            "user_name": self._users_list.get(message["user"], {}).get("name"),
-                            "user_title": self._users_list.get(message["user"], {}).get("title"),
-                            "user_email": self._users_list.get(message["user"], {}).get("email"),
-                            "user_is_bot": self._users_list.get(message["user"], {}).get("is_bot"),
-                            "user_first_name": self._users_list.get(message["user"], {}).get("first_name"),
-                            "user_last_name": self._users_list.get(message["user"], {}).get("last_name"),
-                            "user_is_deleted": self._users_list.get(message["user"], {}).get("is_deleted"),
-                            "user_display_name": self._users_list.get(message["user"], {}).get("display_name")},
+                            "user_id": user_id,
+                            "user_name": user_dict.get("name"),
+                            "user_title": user_dict.get("title"),
+                            "user_email": user_dict.get("email"),
+                            "user_is_bot": user_dict.get("is_bot"),
+                            "user_first_name": user_dict.get("first_name"),
+                            "user_last_name": user_dict.get("last_name"),
+                            "user_is_deleted": user_dict.get("is_deleted"),
+                            "user_display_name": user_dict.get("display_name")},
 
 
                         "channel":
@@ -54,6 +58,7 @@ class MessagesService:
                 "user_id": mention,
                 "user_name": self._users_list.get(mention, {}).get("name"),
                 "user_email": self._users_list.get(mention, {}).get("email"),
+                "user_title": self._users_list.get(message["user"], {}).get("title"),
                 "user_is_bot": self._users_list.get(mention, {}).get("is_bot"),
                 "user_first_name": self._users_list.get(mention, {}).get("first_name"),
                 "user_last_name": self._users_list.get(mention, {}).get("last_name"),
@@ -69,24 +74,29 @@ class MessagesService:
             self._delete_file(message_dict["files"])
 
     def save_messages_to_dict(self, message: dict):
-        user_id = message["user"]
+        if "user" not in message:
+            self._logger_bot.info(message)
+            user_id = message["bot_id"]
+        else:
+            user_id = message["user"]
         if not self._config_service.is_allowed_user(self._find_user_name_by_key(user_id)):
             return
-
+        user_dict = self._get_user_item(user_id)
         users_mentions = self._extract_users_from_message(message["text"])
 
         message["text"] = self.replace_mentions(message["text"])
 
         message_dict = {"text": message["text"],
                         "user": {
-                            "user_id": message["user"],
-                            "user_name": self._users_list.get(message["user"], {}).get("name"),
-                            "user_email": self._users_list.get(message["user"], {}).get("email"),
-                            "user_is_bot": self._users_list.get(message["user"], {}).get("is_bot"),
-                            "user_first_name": self._users_list.get(message["user"], {}).get("first_name"),
-                            "user_last_name": self._users_list.get(message["user"], {}).get("last_name"),
-                            "user_is_deleted": self._users_list.get(message["user"], {}).get("is_deleted"),
-                            "user_display_name": self._users_list.get(message["user"], {}).get("display_name")},
+                            "user_id": user_id,
+                            "user_name": user_dict.get("name"),
+                            "user_email": user_dict.get("email"),
+                            "user_title": user_dict.get("title"),
+                            "user_is_bot": user_dict.get("is_bot"),
+                            "user_first_name": user_dict.get("first_name"),
+                            "user_last_name": user_dict.get("last_name"),
+                            "user_is_deleted": user_dict.get("is_deleted"),
+                            "user_display_name": user_dict.get("display_name")},
 
 
                         "channel":
@@ -124,12 +134,14 @@ class MessagesService:
             reply_list = []
             for reply_message in message["reply"]:
                 users_mentions.extend(self._extract_users_from_message(reply_message["text"]))
-                reply_dict = {"text": self.replace_mentions(reply_message["text"]), "user_id": reply_message["user"],
+                reply_dict = {"text": self.replace_mentions(reply_message["text"]),
+                              "user_id": reply_message["user"],
                               "user":
                                   {
                                       "user_id": reply_message["user"],
                                       "user_name": self._users_list.get(reply_message["user"], {}).get("name"),
                                       "user_email": self._users_list.get(reply_message["user"], {}).get("email"),
+                                      "user_title": self._users_list.get(reply_message["user"], {}).get("title"),
                                       "user_is_bot": self._users_list.get(reply_message["user"], {}).get("is_bot"),
                                       "user_first_name": self._users_list.get(reply_message["user"], {}).get(
                                           "first_name"),
@@ -147,6 +159,8 @@ class MessagesService:
                               "ts": reply_message["ts"], "is_attached": False,
                               "is_thread": True
                               }
+
+                reply_dict["text"] = self._add_timestamp_to_text(reply_dict["text"], reply_dict["ts"])
                 if "files" in reply_message:
                     reply_dict["files"] = reply_message["files"]
                 reply_list.append(reply_dict)
@@ -158,6 +172,7 @@ class MessagesService:
                 "user_id": mention,
                 "user_name": self._users_list.get(mention, {}).get("name"),
                 "user_email": self._users_list.get(mention, {}).get("email"),
+                "user_title": self._users_list.get(mention, {}).get("title"),
                 "user_is_bot": self._users_list.get(mention, {}).get("is_bot"),
                 "user_first_name": self._users_list.get(mention, {}).get("first_name"),
                 "user_last_name": self._users_list.get(mention, {}).get("last_name"),
@@ -171,10 +186,19 @@ class MessagesService:
         self.mm_upload_msg.upload_messages(message_dict)
 
     def _find_user_name_by_key(self, key) -> str:
-        return self._users_list.get(key)["name"]
+        user_name = key
+        if self._logger_bot.info(self._users_list.get(key)):
+            user_name = self._users_list.get(key)["name"]
+
+        return user_name
 
     def _get_user_item(self, user_id: str) -> dict:
         user_dict = self._users_list.get(user_id)
+        if not user_dict:
+            user_dict = {"id": user_id, "name": user_id, "title": "", "email": "",
+                         "is_bot": True,
+                         "is_deleted": False, "first_name": user_id,
+                         "last_name": user_id, "display_name": user_id}
         return user_dict
 
     def get_users_list(self) -> dict:

@@ -17,6 +17,7 @@ class SettingsParser:
     sync_users_command: str
     config_file: str
     log_file: str
+    work_dir: str
 
     def __init__(self):
 
@@ -26,6 +27,7 @@ class SettingsParser:
             _settings_file_exists = False
         else:
             config.read(os.environ.get('WORKDIR') + '/settings.ini')
+            self.work_dir = os.environ.get('WORKDIR')
 
         if (os.environ.get('SLACK_BOT_TOKEN') == '' or os.environ.get(
                 'SLACK_BOT_TOKEN') is None) and _settings_file_exists and config.has_option('slack', 'slack_bot_token'):
@@ -115,16 +117,16 @@ class SettingsParser:
             self.log_file = os.environ.get('WORKDIR') + '/log/' + os.environ.get('LOG_FILE')
 
         if ((self.slack_bot_token == '' or self.slack_bot_token is None) or (
-                self.slack_app_token == '' or self.slack_app_token is None) \
+                self.slack_app_token == '' or self.slack_app_token is None)
                 or (self.mattermost_bot_token == '' or self.mattermost_bot_token is None) or (
                 self.mattermost_url == '' or self.mattermost_url is None) or (
-                self.config_file == '' or self.config_file is None) \
-                or (self.slack_signing_secret == '' or self.slack_signing_secret is None) \
-                or (self.set_date_sync_command == '' or self.set_date_sync_command is None) \
-                or (self.set_excluded_users_command == '' or self.set_excluded_channels_command is None) \
-                or (self.set_excluded_users_command == '' or self.set_excluded_users_command is None) \
-                or (self.get_config_command == '' or self.get_config_command is None) \
-                or (self.start_integration_command == '' or self.start_integration_command is None)\
+                self.config_file == '' or self.config_file is None)
+                or (self.slack_signing_secret == '' or self.slack_signing_secret is None)
+                or (self.set_date_sync_command == '' or self.set_date_sync_command is None)
+                or (self.set_excluded_users_command == '' or self.set_excluded_channels_command is None)
+                or (self.set_excluded_users_command == '' or self.set_excluded_users_command is None)
+                or (self.get_config_command == '' or self.get_config_command is None)
+                or (self.start_integration_command == '' or self.start_integration_command is None)
                 or (self.log_file == '' or self.log_file is None)
                 or (self.sync_users_command == '' or self.sync_users_command is None)):
             raise SettingsError()

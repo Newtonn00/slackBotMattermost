@@ -4,6 +4,7 @@ from typing import List
 from requests import HTTPError
 
 from src.entity.pin_entity import PinEntity
+from src.util.common_counter import CommonCounter
 
 
 class MattermostPins:
@@ -43,6 +44,7 @@ class MattermostPins:
             self._logger_bot.error(
                 f'Mattermost API Error (channels/pinned). Status code: {response.status_code} '
                 f'Response:{response.text} Error: {err}')
+            CommonCounter.increment_error()
 
         for key, pin in pin_dict.items():
             pin_entity_list.append(self._map_dict_to_pin_entity(pin))
@@ -61,6 +63,7 @@ class MattermostPins:
         except HTTPError:
             self._logger_bot.error(
                 f'Mattermost API Error (posts/unpin). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
 
     def pin(self, post_id: str):
         response = ''
@@ -70,10 +73,12 @@ class MattermostPins:
             response.raise_for_status()
             data = response.json()
             self._logger_bot.info("Mattermost post %s pinned", post_id)
+            CommonCounter.increment_pin()
 
         except HTTPError:
             self._logger_bot.error(
                 f'Mattermost API Error (posts/pin). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
 
     def get_message_id_by_ts(self, messages_dict: dict, ts: str) -> str:
         post_id = ''

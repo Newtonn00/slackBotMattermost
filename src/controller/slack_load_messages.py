@@ -6,6 +6,7 @@ import requests
 from slack_sdk.errors import SlackApiError
 from slack_sdk import WebClient
 
+from src.util.common_counter import CommonCounter
 from src.util.settings_parser import SettingsParser
 
 
@@ -15,7 +16,8 @@ class SlackLoadMessages:
     CREATED = 201
     OK = 200
 
-    def __init__(self, web_client, config_service, messages_service, pin_service, bookmark_service, thread_service):
+    def __init__(self, web_client, config_service, messages_service, pin_service, bookmark_service, thread_service,
+                 slack_messages_handler):
         settings = SettingsParser()
 
         self._logger_bot = logging.getLogger("")
@@ -28,6 +30,8 @@ class SlackLoadMessages:
         self._pin_service = pin_service
         self._bookmark_service = bookmark_service
         self._thread_service = thread_service
+        self._slack_messages_handler = slack_messages_handler
+        self._initial_user_id = ""
         self._messages_per_page = 100
         self._channel_filter = []
 
@@ -87,16 +91,20 @@ class SlackLoadMessages:
                     except SlackApiError as e:
                         self._logger_bot.error(
                             f"SlackAPIError (conversations_history): {e.response['error']}")
+                        CommonCounter.increment_error()
                         break
 
                 self._logger_bot.info("Selected %d messages from Slack channel %s", len(messages),
                                       channel_item["name"])
 
+                messages_count = len(messages)
+                replies_count = 0
                 for message in messages:
                     message["is_thread"] = False
                     if "reply_users" in message:
                         message["reply"] = self.load_threads(channel_id=channel_item["id"], oldest_date=oldest_date,
-                                                              ts_of_parent_message=message["ts"])
+                                                             ts_of_parent_message=message["ts"])
+                        replies_count += len(message["reply"])
                         message["is_thread"] = True
                     message["channel"] = channel_item["id"]
                     if new_start_date < float(message["ts"]):
@@ -135,6 +143,12 @@ class SlackLoadMessages:
                     self._config_service.set_last_synchronize_date_unix(new_start_date,
                                                                         channel_name=channel_item["name"])
 
+                text_msg = (f'channel {channel_item["name"]} transfer statistics:\n'
+                            f'{CommonCounter.get_str_custom_statistic()}')
+                CommonCounter.init_custom_counter()
+                self._logger_bot.info(text_msg)
+                self._slack_messages_handler.send_message(self._initial_user_id, text_msg)
+
     def load_threads(self, channel_id, ts_of_parent_message, oldest_date) -> list:
         try:
             response = self._web_client.conversations_replies(
@@ -147,6 +161,7 @@ class SlackLoadMessages:
             self._logger_bot.info("Thread (%d messages) loaded", len(reply_messages))
         except SlackApiError as e:
             self._logger_bot.error(f"SlackAPIError (conversations_replies): {e.response['error']}")
+            CommonCounter.increment_error()
             return []
         thread_messages = []
         for reply in reply_messages:
@@ -183,6 +198,7 @@ class SlackLoadMessages:
 
         except SlackApiError as e:
             self._logger_bot.error(f"SlackAPIError (users_list): {e.response['error']}")
+            CommonCounter.increment_error()
             return
         users = {}
         for user in user_list:
@@ -199,7 +215,8 @@ class SlackLoadMessages:
             user_first_name = user["profile"].get("first_name")
             user_last_name = user["profile"].get("last_name")
             user_is_deleted = user.get("deleted")
-            users[user["id"]] = {"id": user_id, "name": user_name, "title": user_title, "email": user_email, "is_bot": user_is_bot,
+            users[user["id"]] = {"id": user_id, "name": user_name, "title": user_title, "email": user_email,
+                                 "is_bot": user_is_bot,
                                  "is_deleted": user_is_deleted, "first_name": user_first_name,
                                  "last_name": user_last_name, "display_name": user_display_name}
 
@@ -262,6 +279,7 @@ class SlackLoadMessages:
         except SlackApiError as e:
             self._logger_bot.error(f"SlackAPIError (conversations_list types=public_channel,private_channel): "
                                    f"{e.response['error']}")
+            CommonCounter.increment_error()
             return
 
         try:
@@ -315,6 +333,7 @@ class SlackLoadMessages:
             self._logger_bot.info("Slack direct messages channels loaded (%d)", len(channels_users_list))
         except SlackApiError as e:
             self._logger_bot.error(f"SlackAPIError (conversations_list types=im,mpim): {e.response['error']}")
+            CommonCounter.increment_error()
             return
 
         channels = {}
@@ -402,6 +421,7 @@ class SlackLoadMessages:
         except SlackApiError as e:
             self._logger_bot.error(f"SlackAPIError (conversations_members): "
                                    f"{e.response['error']}")
+            CommonCounter.increment_error()
             return []
         return members_list
 
@@ -448,6 +468,7 @@ class SlackLoadMessages:
                         f'File {files["name"]} is downloaded to {local_file_path}')
                 except Exception:
                     self._logger_bot.error("Error in downloading as local file")
+                    CommonCounter.increment_error()
 
                 files_dict = {
                     "file_name": files["name"],
@@ -458,6 +479,7 @@ class SlackLoadMessages:
                 self._logger_bot.info(f'{files["name"]} is downloaded from Slack')
             else:
                 self._logger_bot.error(f'SlackAPIError (files): {response_file.json()}')
+                CommonCounter.increment_error()
         return files_list
 
     def set_channels_list(self, channels: dict):
@@ -471,3 +493,12 @@ class SlackLoadMessages:
             if channel["id"] == channel_id:
                 return channel
         return {}
+
+    def set_initial_user(self, user_id: str):
+        self._initial_user_id = user_id
+
+    def get_channels_list(self):
+        return self._channels_list
+
+    def get_users_list(self):
+        return self._users_list

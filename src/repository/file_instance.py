@@ -3,7 +3,6 @@ from dataclasses import asdict
 
 from src.util.settings_parser import SettingsParser
 from src.entity.config_entity import ConfigEntity
-from datetime import datetime
 
 
 class FileInstance:

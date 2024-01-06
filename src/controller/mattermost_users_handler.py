@@ -2,6 +2,8 @@ import logging
 
 from requests import HTTPError
 
+from src.util.common_counter import CommonCounter
+
 
 class MattermostUsersHandler:
     _users_list: list
@@ -38,6 +40,7 @@ class MattermostUsersHandler:
         except HTTPError:
             self._logger_bot.error(
                 f'Mattermost API Error (users). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
 
         return self._users_list
 
@@ -52,6 +55,7 @@ class MattermostUsersHandler:
         else:
             self._logger_bot.error(
                 f'Mattermost API Error (teams). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
 
         return team_id
 
@@ -74,6 +78,7 @@ class MattermostUsersHandler:
         else:
             self._logger_bot.error(
                 f'Mattermost API Error (users). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
         return user_dict
 
     def get_profile_image(self, user_id: str) -> str:
@@ -90,6 +95,7 @@ class MattermostUsersHandler:
         else:
             self._logger_bot.error(
                 f'Mattermost API Error (users/image). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
         return user_dict
 
     def update(self, user_id: str, user_data: dict):
@@ -107,6 +113,7 @@ class MattermostUsersHandler:
         else:
             self._logger_bot.error(
                 f'Mattermost API Error (users/patch). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
 
     def _add_user_to_team(self, user_id: str, team_id: str):
         response = ''
@@ -126,6 +133,7 @@ class MattermostUsersHandler:
             self._logger_bot.error(
                 f'Mattermost API Error (teams/members). Status code: {response.status_code} Response:{response.text}'
                 f'Error:{err}')
+            CommonCounter.increment_error()
 
     def upload_profile_image(self, local_path: str, mm_user_id: str):
 
@@ -141,3 +149,4 @@ class MattermostUsersHandler:
             self._logger_bot.error(
                 f'Mattermost API Error (users/image). Status code: {response_file.status_code} '
                 f'Response:{response_file.text}')
+            CommonCounter.increment_error()

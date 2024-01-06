@@ -2,6 +2,7 @@ import logging
 
 from src.entity.config_entity import ConfigEntity
 from src.repository.file_instance import FileInstance
+from src.util.common_counter import CommonCounter
 
 
 class ConfigRepository():
@@ -15,6 +16,7 @@ class ConfigRepository():
             config_entity = self._file_instance.read_file()
         except Exception as e:
             self._logger_bot.error("Error during reading config: %s", str(e))
+            CommonCounter.increment_error()
         return config_entity
 
     def save_config(self,config_entity: ConfigEntity):
@@ -22,3 +24,4 @@ class ConfigRepository():
             self._file_instance.save_file(config_entity)
         except Exception as e:
             self._logger_bot.error("Error during saving config: %s", str(e))
+            CommonCounter.increment_error()

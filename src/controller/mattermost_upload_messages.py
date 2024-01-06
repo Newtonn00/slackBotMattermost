@@ -2,6 +2,8 @@ import logging
 
 from requests import HTTPError
 
+from src.util.common_counter import CommonCounter
+
 
 class MattermostUploadMessages:
     def __init__(self, mattermost_web_client):
@@ -39,6 +41,7 @@ class MattermostUploadMessages:
         except HTTPError:
             self._logger_bot.error(
                 f'Mattermost API Error (users). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
 
     def load_channels(self):
         response = ''
@@ -65,6 +68,8 @@ class MattermostUploadMessages:
             for channel in channels_list:
                 if self._is_selected_channel(channel["name"]):
                     filtered_channels.append(channel)
+                elif self._is_selected_channel(channel["display_name"]):
+                    filtered_channels.append(channel)
 
             self.set_channels_list(filtered_channels)
             for channel in filtered_channels:
@@ -72,6 +77,7 @@ class MattermostUploadMessages:
         except HTTPError:
             self._logger_bot.error(
                 f'Mattermost API Error (channels). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
 
     def upload_messages(self, message_data):
         channel_id = self._get_channel_by_name(message_data["channel"])
@@ -83,6 +89,7 @@ class MattermostUploadMessages:
 
         if channel_id is None:
             self._logger_bot.error("Channel %s did`nt find in Mattermost", message_data["channel"]["channel_name"])
+            CommonCounter.increment_error()
             return
 
         for mention in message_data["users_in_mentions"]:
@@ -116,6 +123,7 @@ class MattermostUploadMessages:
         if response.status_code == 201:
             post_info = response.json()
             self._logger_bot.info("Message loaded to Mattermost")
+            CommonCounter.increment_message()
 
             if message_data["is_thread"]:
                 orig_post_id = post_info["id"]
@@ -145,34 +153,43 @@ class MattermostUploadMessages:
                         f'{self._mm_web_client.mattermost_url}/posts', json=data)
                     if response.status_code == 201:
                         self._logger_bot.info("Threads`s message loaded to Mattermost")
+                        CommonCounter.increment_message()
                     else:
                         self._logger_bot.error(
                             f'Mattermost API Error (posts). Status code: {response.status_code} '
                             f'Response:{response.text}')
+                        CommonCounter.increment_error()
 
         else:
             self._logger_bot.error(
                 f'Mattermost API Error (posts). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
 
     def _upload_files(self, files_from_message: list, channel_id: str) -> list:
         files_list = []
         for file in files_from_message:
-            self._logger_bot.info("File %s is loading to Mattermost", file["file_path"])
-            files = {"files": open(file["file_path"], "rb")}
-            params = {"channel_id": channel_id}
-
-            response_file = self._mm_web_client.mattermost_session.post(
-                f'{self._mm_web_client.mattermost_url}/files', params=params,
-                files=files)
-
-            if response_file.status_code == 201:
-                response_json = response_file.json()
-                self._logger_bot.info("File %s loaded to Mattermost", file["file_path"])
-                files_list.append(response_json['file_infos'][0]['id'])
+            if isinstance(file, list):
+                files_list.extend(self._upload_files(file, channel_id))
             else:
-                self._logger_bot.error(
-                    f'Mattermost API Error (files). Status code: {response_file.status_code} '
-                    f'Response:{response_file.text}')
+                self._logger_bot.info("File %s is loading to Mattermost", file["file_path"])
+                files = {"files": open(file["file_path"], "rb")}
+                params = {"channel_id": channel_id}
+
+                response_file = self._mm_web_client.mattermost_session.post(
+                    f'{self._mm_web_client.mattermost_url}/files', params=params,
+                    files=files)
+
+                if response_file.status_code == 201:
+                    response_json = response_file.json()
+                    self._logger_bot.info("File %s loaded to Mattermost", file["file_path"])
+                    files_list.append(response_json['file_infos'][0]['id'])
+                    CommonCounter.increment_file()
+                else:
+                    self._logger_bot.error(
+                        f'Mattermost API Error (files). Status code: {response_file.status_code} '
+                        f'Response:{response_file.text}')
+                    CommonCounter.increment_error()
+
         return files_list
 
     def _get_user_by_email(self, user_data: dict) -> str:
@@ -184,7 +201,7 @@ class MattermostUploadMessages:
                 user_id = user["id"]
                 break
 
-        if user_id is None and not user_data["user_is_bot"]:
+        if user_id is None and not user_data["user_is_bot"] and user_data["user_email"]:
             self._logger_bot.info("user_data: %s", user_data)
             #            self._logger_bot.info("users_list: %s", self._users_list)
             user_id = self._create_user(user_data)
@@ -205,8 +222,10 @@ class MattermostUploadMessages:
 
     def _get_channel_by_name(self, channel_data: dict) -> str:
         channel_id = None
+#        self._logger_bot.info(f'channel MM - {channel_data}')
         for channel in self._channels_list:
-            if channel["name"] == channel_data["channel_name"]:
+            if ((channel["name"] == channel_data["channel_name"])
+                    or (channel["display_name"] == channel_data["channel_name"])):
                 channel_id = channel["id"]
                 break
 
@@ -237,9 +256,11 @@ class MattermostUploadMessages:
             self._channels_list.append(response_data)
             self._logger_bot.info("Channel %s created", channel_data["channel_name"])
             self._set_channels_members(channel_id)
+            CommonCounter.increment_channel()
         else:
             self._logger_bot.error(
                 f'Mattermost API Error (channels). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
 
         return channel_id
 
@@ -253,7 +274,7 @@ class MattermostUploadMessages:
             "display_name": user_data["user_display_name"],
             "nickname": user_data["user_display_name"],
             "scheme_id": '',
-            "position": user_data["title"],
+            "position": user_data["user_title"],
             "email": user_data["user_email"],
             "first_name": user_data["user_first_name"],
             "last_name": user_data["user_last_name"],
@@ -270,10 +291,12 @@ class MattermostUploadMessages:
             self._logger_bot.info("User %s created", self._get_user(user_id))
 
             self._add_user_to_team(user_id=user_id, team_id=self._team_id)
+            CommonCounter.increment_user()
 
         else:
             self._logger_bot.error(
                 f'Mattermost API Error (users). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
 
         return user_id
 
@@ -287,6 +310,7 @@ class MattermostUploadMessages:
         else:
             self._logger_bot.error(
                 f'Mattermost API Error (teams). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
 
     def _add_user_to_channel(self, user_id: str, channel_id: str):
         response = ''
@@ -321,6 +345,7 @@ class MattermostUploadMessages:
             self._logger_bot.error(
                 f'Mattermost API Error (channels/member). Status code: {response.status_code} Response:{response.text} '
                 f'Error:{err}')
+            CommonCounter.increment_error()
 
     def _set_channels_members(self, channel_id: str):
         channels = self._channels_list
@@ -350,6 +375,7 @@ class MattermostUploadMessages:
             self._logger_bot.error(
                 f'Mattermost API Error (channels/members). '
                 f'Status code: {response.status_code} Response:{response.text} Error:{err}')
+            CommonCounter.increment_error()
         return channel_members
 
     def _is_user_in_channel(self, user_id: str, channel_id: str) -> bool:
@@ -379,6 +405,7 @@ class MattermostUploadMessages:
             self._logger_bot.error(
                 f'Mattermost API Error (teams/members). Status code: {response.status_code} Response:{response.text}'
                 f'Error:{err}')
+            CommonCounter.increment_error()
 
     def set_channel_filter(self, channel_filter):
         if len(channel_filter) != 0 and channel_filter != 'all':

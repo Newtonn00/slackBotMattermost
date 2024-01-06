@@ -5,6 +5,7 @@ class ThreadService:
     _slack_channels_list: dict
     _mm_channels_list: list
     _slack_load_pins = None
+    _slack_users_list: list
 
     def __init__(self, config_service, messages_service, mattermost_upload_messages, mattermost_messages,
                  slack_messages_handler):
@@ -19,6 +20,8 @@ class ThreadService:
         self.set_mm_channels_list(self._mattermost_upload_messages.get_channel_list())
         self._apply_filter_to_mm_channel()
         self._apply_filter_to_slack_channel()
+        self._message_service.set_users_list(self._slack_users_list)
+        self._message_service.set_channels_list(self._slack_channels_list)
         for channel_key, channel_item in self._slack_channels_list.items():
             mm_channel_id = self._get_mm_channel_id_by_name(channel_item["name"])["id"]
             date_for_selection_messages = int((datetime.now() - timedelta(days=90)).timestamp())
@@ -35,8 +38,7 @@ class ThreadService:
                                                                             int(last_date_sync_unix))
 
             for mm_post_id, slack_message_ts in slack_thread_timestamps.items():
-                reply_messages = self._slack_load_thread_replies(channel_key, slack_message_ts,
-                                                                      int(last_date_sync_unix))
+                reply_messages = self._slack_load_thread_replies(channel_key, ts=slack_message_ts)
 
                 for message in reply_messages:
 
@@ -59,7 +61,7 @@ class ThreadService:
     def _upload_message_to_mattermost(self, message: dict):
         self._message_service.save_reply_to_mattermost(message)
 
-    def _slack_load_thread_replies(self, channel_id: str, ts: str, last_date_sync_unix: int) -> list:
+    def _slack_load_thread_replies(self, channel_id: str, ts: str, last_date_sync_unix = 0) -> list:
         reply_messages = self._slack_messages_handler.load_threads(channel_id, ts, last_date_sync_unix)
         return reply_messages
 
@@ -73,6 +75,9 @@ class ThreadService:
                     if int(float(ts)) < last_date_sync_unix:
                         thread_messages.update({message["root_id"]: ts})
         return thread_messages
+
+    def set_slack_users_list(self, users_list):
+        self._slack_users_list = users_list
 
     def set_slack_channels_list(self, channels_list):
         self._slack_channels_list = channels_list

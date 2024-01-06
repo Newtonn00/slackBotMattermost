@@ -4,6 +4,8 @@ from typing import List
 
 from slack_sdk.errors import SlackApiError
 from slack_sdk import WebClient
+
+from src.util.common_counter import CommonCounter
 from src.util.settings_parser import SettingsParser
 from src.entity.bookmark_entity import BookmarkEntity
 
@@ -56,6 +58,7 @@ class SlackLoadBookmarks:
         except SlackApiError as e:
             self._logger_bot.error(
                 f"SlackAPIError (bookmarks_list): {e.response['error']}")
+            CommonCounter.increment_error()
 
         self._logger_bot.info("Selected %d bookmarks from Slack channel_id %s", len(bookmarks),
                               channel_id)

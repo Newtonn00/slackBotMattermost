@@ -63,7 +63,8 @@ class Containers(containers.DeclarativeContainer):
                                             messages_service=messages_service,
                                             pin_service=pin_service,
                                             bookmark_service=bookmark_service,
-                                            thread_service=thread_service)
+                                            thread_service=thread_service,
+                                            slack_messages_handler=slack_messages_handler)
     slack_app_manager = providers.Factory(SlackAppManager,
                                           config_service=config_service,
                                           slack_load_messages=slack_load_messages,

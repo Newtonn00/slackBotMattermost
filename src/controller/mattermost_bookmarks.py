@@ -4,6 +4,7 @@ from typing import List
 from requests import HTTPError
 
 from src.entity.bookmark_entity import BookmarkEntity
+from src.util.common_counter import CommonCounter
 
 
 class MattermostBookmarks:
@@ -32,3 +33,4 @@ class MattermostBookmarks:
             self._logger_bot.error(
                 f'Mattermost API Error (channels header). Status code: {response.status_code} Response:{response.text} '
                 f'Error: {err}')
+            CommonCounter.increment_error()

@@ -1,6 +1,8 @@
+import logging
 from typing import List
 
 from src.entity.bookmark_entity import BookmarkEntity
+from src.util.common_counter import CommonCounter
 
 
 class BookmarkService:
@@ -13,6 +15,7 @@ class BookmarkService:
         self._mattermost_bookmarks = mattermost_bookmarks
         self._mattermost_upload_messages = mattermost_upload_messages
         self._channel_filter = []
+        self._logger_bot = logging.getLogger("")
 
     def bookmarks_process(self):
         self.set_mm_channels_list(self._mattermost_upload_messages.get_channel_list())
@@ -20,7 +23,15 @@ class BookmarkService:
         self._apply_filter_to_slack_channel()
         for channel_key, channel_item in self._slack_channels_list.items():
             slack_bookmark_list = self._get_slack_bookmarks(channel_key)
-            mm_channel_id = self._get_mm_channel_id_by_name(channel_item["name"])["id"]
+
+            mm_channel_item = self._get_mm_channel_id_by_name(channel_item["name"])
+            if mm_channel_item:
+                mm_channel_id = mm_channel_item.get("id")
+            else:
+                self._logger_bot.info(f'Channel {channel_item["name"]} not found in Mattermost')
+                CommonCounter.increment_error()
+                break
+
             for bookmark in slack_bookmark_list:
                 bookmark.mm_channel_id = mm_channel_id
 
@@ -48,7 +59,7 @@ class BookmarkService:
     def _get_mm_channel_id_by_name(self, channel_name: str) -> dict:
         mm_channel: dict = {}
         for channel in self._mm_channels_list:
-            if channel["name"] == channel_name:
+            if channel["name"] == channel_name or (channel["display_name"] == channel_name):
                 mm_channel = channel
                 break
         return mm_channel
