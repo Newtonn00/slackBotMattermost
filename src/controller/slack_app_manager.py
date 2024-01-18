@@ -1,4 +1,5 @@
-import sys
+import asyncio
+from aiohttp import web
 
 import requests
 from slack_bolt import App
@@ -48,20 +49,18 @@ class SlackAppManager:
         self._thread_service = thread_service
         self.register_commands()
 
-        @self.flask_app.route("/slack/events", methods=["POST"])
-        def slack_events():
-            return self.handler.handle(request)
+    def slack_events(self):
+        return self.handler.handle(request)
 
-        @self.flask_app.route("/auth/redirect", methods=["GET"])
-        def auth_redirect():
-            # Получаем код из параметра запроса
-            print(request.args)
-            code = request.args.get('code')
-            # Обмениваем код на токен доступа
-            user_data = {}
-            user_data = self.exchange_code_for_token(code)
-            self.start_integration_dm(user_data)
-            return CommonCounter.get_str_statistic()
+    def auth_redirect(self):
+        # Получаем код из параметра запроса
+        print(request.args)
+        code = request.args.get('code')
+        # Обмениваем код на токен доступа
+        user_data = {}
+        user_data = self.exchange_code_for_token(code)
+        self.start_integration_dm(user_data)
+        return CommonCounter.get_str_statistic()
 
 
     def register_commands(self):
@@ -281,7 +280,23 @@ class SlackAppManager:
 
         self.logger_bot.info("Transfer direct messages finished")
 
+    async def run_async_app(self):
+
+        app = web.Application()
+        app.router.add_post("/slack/events",)
+        app.router.add_get("/auth/redirect",)
+
+        # Запускаем приложение
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host="0.0.0.0", port=3005)
+        await site.start()
+
+        # Ожидаем завершения работы приложения
+        await runner.cleanup()
+
     def run(self, port=3005):
         self.flask_app.run(port=port, host="0.0.0.0", debug=False)
+
 
 #        self.app.start(port=port)
