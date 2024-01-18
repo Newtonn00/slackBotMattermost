@@ -30,6 +30,5 @@ class ConfigEntity:
             excluded_users=data.get('excluded_users')
         )
 
-
     def as_dict(self) -> dict:
         return asdict(self)

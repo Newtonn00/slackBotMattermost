@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 
 @dataclass
@@ -15,8 +15,8 @@ class UserEntity:
     is_app_user: bool
     image_original: str
 
-
-
+    def as_dict(self) -> dict:
+        return asdict(self)
 
 
 

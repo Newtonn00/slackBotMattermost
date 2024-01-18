@@ -25,9 +25,9 @@ from src.repository.config_repository import ConfigRepository
 class Containers(containers.DeclarativeContainer):
     slack_web_client = providers.Singleton(SlackWebClient)
     mattermost_web_client = providers.Singleton(MattermostWebClient)
-    mattermost_upload_messages = providers.Singleton(MattermostUploadMessages,
-                                                     mattermost_web_client=mattermost_web_client)
+
     mattermost_messages = providers.Singleton(MattermostMessages, mattermost_web_client)
+
 
     config_repo = providers.Factory(ConfigRepository)
     config_service = providers.Factory(ConfigService, config_repo=config_repo)
@@ -39,14 +39,21 @@ class Containers(containers.DeclarativeContainer):
 
     mattermost_pins = providers.Factory(MattermostPins, mattermost_web_client)
     mattermost_bookmarks = providers.Factory(MattermostBookmarks, mattermost_web_client)
+
+    user_service = providers.Singleton(UserService,
+                                       slack_users_handler=slack_users_handler,
+                                       mattermost_users_handler=mattermost_users_handler)
+
+    mattermost_upload_messages = providers.Singleton(MattermostUploadMessages,
+                                                     mattermost_web_client=mattermost_web_client,
+                                                     mattermost_messages=mattermost_messages,
+                                                     user_service=user_service)
+
     pin_service = providers.Singleton(PinService, slack_load_pins, mattermost_pins, mattermost_upload_messages,
                                       mattermost_messages)
     bookmark_service = providers.Singleton(BookmarkService, slack_load_bookmarks, mattermost_bookmarks,
                                            mattermost_upload_messages)
 
-    user_service = providers.Singleton(UserService,
-                                       slack_users_handler=slack_users_handler,
-                                       mattermost_users_handler=mattermost_users_handler)
     messages_service = providers.Singleton(MessagesService,
                                            config_service=config_service,
                                            mattermost_upload_messages=mattermost_upload_messages)

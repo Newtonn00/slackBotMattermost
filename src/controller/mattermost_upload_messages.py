@@ -6,7 +6,8 @@ from src.util.common_counter import CommonCounter
 
 
 class MattermostUploadMessages:
-    def __init__(self, mattermost_web_client):
+
+    def __init__(self, mattermost_web_client, mattermost_messages, user_service):
         self._channels_list = []
         self._users_list = []
         self._channel_filter = []
@@ -14,6 +15,10 @@ class MattermostUploadMessages:
         self._logger_bot = logging.getLogger("")
         self._mm_web_client = mattermost_web_client
         self._messages_per_page = 100
+        self._mattermost_messages = mattermost_messages
+        self._channels_slack_ts = {}
+        self._main_slack_user_id = None
+        self._user_service = user_service
 
     def load_users(self):
         response = ''
@@ -41,6 +46,47 @@ class MattermostUploadMessages:
         except HTTPError:
             self._logger_bot.error(
                 f'Mattermost API Error (users). Status code: {response.status_code} Response:{response.text}')
+            CommonCounter.increment_error()
+
+    def load_users_channels(self):
+        user_id = self._user_service.get_user_id_mattermost_by_user_id_slack(self._main_slack_user_id)
+        response = ''
+        params = {
+            "page": 1,
+            "per_page": self._messages_per_page,
+            "user_id": user_id,
+            "type": 'D'
+        }
+        channels_list = []
+        previous_channels = []
+        try:
+            while True:
+                response = self._mm_web_client.mattermost_session.get(
+                    f'{self._mm_web_client.mattermost_url}/users/{user_id}/channels',
+                    params=params)
+                response.raise_for_status()
+                channels = response.json()
+
+                if not channels or channels == previous_channels:
+                    break
+                previous_channels = channels
+                channels_list.extend(channels)
+                params["page"] += 1
+            self._logger_bot.info("Mattermost users channels loaded (%d)", len(channels_list))
+            filtered_channels = []
+            for channel in channels_list:
+                if channel["type"] == 'D':
+                    if self._is_selected_channel(channel["name"]):
+                        filtered_channels.append(channel)
+                    elif self._is_selected_channel(channel["display_name"]):
+                        filtered_channels.append(channel)
+
+            self.set_channels_list(filtered_channels)
+            for channel in filtered_channels:
+                self._set_channels_members(channel["id"])
+        except HTTPError:
+            self._logger_bot.error(
+                f'Mattermost API Error (users channels). Status code: {response.status_code} Response:{response.text}')
             CommonCounter.increment_error()
 
     def load_channels(self):
@@ -80,7 +126,18 @@ class MattermostUploadMessages:
             CommonCounter.increment_error()
 
     def upload_messages(self, message_data):
-        channel_id = self._get_channel_by_name(message_data["channel"])
+        if not self._users_list:
+            self._users_list = self._user_service.get_users_mattermost_as_list()
+
+        if message_data["channel"]["channel_type"] == "direct":
+            channel_id = self._create_channel(message_data["channel"])
+        else:
+            channel_id = self._get_channel_by_name(message_data["channel"])
+        if channel_id not in self._channels_slack_ts:
+            self._channels_slack_ts[channel_id] = self._get_set_slack_ts(self._mattermost_messages.load_messages(channel_id))
+        if message_data["ts"] in self._channels_slack_ts[channel_id]:
+            self._logger_bot.info(f'Message {message_data["ts"]} has already loaded in Mattermost')
+            return
         user_data = message_data["user"]
         user_id = self._get_user_by_email(user_data)
         if not self._is_user_in_channel(user_id=user_id, channel_id=channel_id) and \
@@ -130,6 +187,9 @@ class MattermostUploadMessages:
 
                 for reply_message in message_data["reply"]:
                     self._logger_bot.info("Thread`s message is loading to Mattermost")
+                    if reply_message["ts"] in self._channels_slack_ts[channel_id]:
+                        self._logger_bot.info(f'Message {reply_message["ts"]} has already loaded in Mattermost')
+                        continue
                     files_list = []
                     if "files" in reply_message:
                         files_list = self._upload_files(reply_message["files"], channel_id=channel_id)
@@ -171,13 +231,15 @@ class MattermostUploadMessages:
             if isinstance(file, list):
                 files_list.extend(self._upload_files(file, channel_id))
             else:
-                self._logger_bot.info("File %s is loading to Mattermost", file["file_path"])
+                self._logger_bot.info("File %s is loading to Mattermost (first phase)", file["file_path"])
                 files = {"files": open(file["file_path"], "rb")}
                 params = {"channel_id": channel_id}
-
+                self._logger_bot.info("File is loading to Mattermost (second phase) - %s and %s", files, params)
                 response_file = self._mm_web_client.mattermost_session.post(
                     f'{self._mm_web_client.mattermost_url}/files', params=params,
                     files=files)
+
+                self._logger_bot.info("File is loading to Mattermost (third phase) - %s", files)
 
                 if response_file.status_code == 201:
                     response_json = response_file.json()
@@ -238,17 +300,30 @@ class MattermostUploadMessages:
         self._logger_bot.info("Channel %s is creating", channel_data["channel_name"])
 
         channel_id = None
-        data = {
-            "team_id": self._team_id,
-            "name": channel_data["channel_name"],
-            "display_name": channel_data["channel_name"],
-            "scheme_id": '',
-            "type": "O",
-        }
-        if channel_data["channel_type"] == "private":
-            data["type"] = "P"
-        response = self._mm_web_client.mattermost_session.post(
-            f'{self._mm_web_client.mattermost_url}/channels', json=data)
+
+        if channel_data["channel_type"] == "direct":
+
+            dm_users_list = []
+            for slack_user_id in  channel_data["channel_members"]:
+                dm_users_list.append(self._user_service.get_user_id_mattermost_by_user_id_slack(slack_user_id))
+
+            data = [dm_users_list[0], dm_users_list[1]]
+
+            response = self._mm_web_client.mattermost_session.post(
+                f'{self._mm_web_client.mattermost_url}/channels/direct', json=data)
+        else:
+
+            data = {
+                "team_id": self._team_id,
+                "name": channel_data["channel_name"],
+                "display_name": channel_data["channel_name"],
+                "scheme_id": '',
+                "type": "O",
+            }
+            if channel_data["channel_type"] == "private":
+                data["type"] = "P"
+            response = self._mm_web_client.mattermost_session.post(
+                f'{self._mm_web_client.mattermost_url}/channels', json=data)
 
         if response.status_code == 201:
             response_data = response.json()
@@ -429,3 +504,13 @@ class MattermostUploadMessages:
 
     def get_channel_list(self) -> list:
         return self._channels_list
+
+    def _get_set_slack_ts(self, messages_data:dict) -> set:
+        slack_ts_set = set()
+        for message_id, message in messages_data.items():
+            if "props" in message and "slack_ts" in message["props"]:
+                slack_ts_set.add(message["props"]["slack_ts"])
+        return slack_ts_set
+
+    def set_main_slack_user_id(self, slack_user_id):
+        self._main_slack_user_id = slack_user_id

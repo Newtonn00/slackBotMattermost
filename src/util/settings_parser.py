@@ -7,6 +7,8 @@ class SettingsParser:
     slack_bot_token: str
     slack_app_token: str
     slack_signing_secret: str
+    slack_client_secret: str
+    slack_client_id: str
     mattermost_bot_token: str
     mattermost_url: str
     set_excluded_channels_command: str
@@ -14,6 +16,7 @@ class SettingsParser:
     set_excluded_users_command: str
     set_date_sync_command: str
     start_integration_command: str
+    start_dm_integration_command: str
     sync_users_command: str
     config_file: str
     log_file: str
@@ -41,6 +44,20 @@ class SettingsParser:
             self.slack_signing_secret = config['slack']['slack_signing_secret']
         else:
             self.slack_signing_secret = os.environ.get('SLACK_SIGNING_SECRET')
+
+        if (os.environ.get('SLACK_CLIENT_SECRET') == '' or os.environ.get(
+                'SLACK_CLIENT_SECRET') is None) and _settings_file_exists and config.has_option('slack',
+                                                                                                 'slack_client_secret'):
+            self.slack_client_secret = config['slack']['slack_client_secret']
+        else:
+            self.slack_client_secret = os.environ.get('SLACK_CLIENT_SECRET')
+
+        if (os.environ.get('SLACK_CLIENT_ID') == '' or os.environ.get(
+                'SLACK_CLIENT_ID') is None) and _settings_file_exists and config.has_option('slack',
+                                                                                                 'slack_client_id'):
+            self.slack_client_id = config['slack']['slack_client_id']
+        else:
+            self.slack_client_id = os.environ.get('SLACK_CLIENT_ID')
 
         if (os.environ.get('SLACK_APP_TOKEN') == '' or os.environ.get(
                 'SLACK_APP_TOKEN') is None) and _settings_file_exists and config.has_option('slack', 'slack_app_token'):
@@ -103,6 +120,14 @@ class SettingsParser:
         else:
             self.start_integration_command = os.environ.get('START_INTEGRATION_COMMAND')
 
+        if (os.environ.get('START_DM_INTEGRATION_COMMAND') == '' or os.environ.get(
+                'START_DM_INTEGRATION_COMMAND') is None) and _settings_file_exists \
+                and config.has_option('slack', 'start_dm_integration_command'):
+            self.start_dm_integration_command = config['slack']['start_dm_integration_command']
+        else:
+            self.start_dm_integration_command = os.environ.get('START_DM_INTEGRATION_COMMAND')
+
+
         if (os.environ.get('SYNC_USERS_COMMAND') == '' or os.environ.get(
                 'SYNC_USERS_COMMAND') is None) and _settings_file_exists \
                 and config.has_option('slack', 'sync_users_command'):
@@ -122,11 +147,14 @@ class SettingsParser:
                 self.mattermost_url == '' or self.mattermost_url is None) or (
                 self.config_file == '' or self.config_file is None)
                 or (self.slack_signing_secret == '' or self.slack_signing_secret is None)
+                or (self.slack_client_secret == '' or self.slack_client_secret is None)
+                or (self.slack_client_id == '' or self.slack_client_id is None)
                 or (self.set_date_sync_command == '' or self.set_date_sync_command is None)
                 or (self.set_excluded_users_command == '' or self.set_excluded_channels_command is None)
                 or (self.set_excluded_users_command == '' or self.set_excluded_users_command is None)
                 or (self.get_config_command == '' or self.get_config_command is None)
                 or (self.start_integration_command == '' or self.start_integration_command is None)
+                or (self.start_dm_integration_command == '' or self.start_dm_integration_command is None)
                 or (self.log_file == '' or self.log_file is None)
                 or (self.sync_users_command == '' or self.sync_users_command is None)):
             raise SettingsError()

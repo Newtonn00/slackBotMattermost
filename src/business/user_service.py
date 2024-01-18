@@ -113,8 +113,23 @@ class UserService:
     def get_users_slack(self) -> List[UserEntity]:
         return self._users_list_slack
 
+    def get_users_slack_as_list(self) -> list:
+        users_list = []
+        for user in self._users_list_slack:
+            users_list.append(user.as_dict())
+
+        return users_list
+
     def get_users_mattermost(self) -> List[UserEntity]:
         return self._users_list_mattermost
+
+    def get_users_mattermost_as_list(self) -> list:
+        users_list = []
+        for user in self._users_list_mattermost:
+            users_list.append(user.as_dict())
+
+        return users_list
+
 
     def _get_user_id_mattermost_by_email(self, email: str) -> str:
         user_id = None
@@ -124,9 +139,27 @@ class UserService:
                 break
         return user_id
 
+    def get_user_id_mattermost_by_user_id_slack(self, slack_user_id: str) -> str:
+        mm_user_id = ""
+        user_entity_slack = self._get_user_entity_slack(slack_user_id)
+        if user_entity_slack and user_entity_slack.email:
+            for user in self._users_list_mattermost:
+                if user.email and user.email.lower() == user_entity_slack.email.lower():
+                    mm_user_id = user.id
+                    break
+        return mm_user_id
+
     def _get_user_entity_mattermost(self, user_id: str) -> UserEntity:
         user_entity = UserEntity
         for user in self._users_list_mattermost:
+            if user.id == user_id:
+                user_entity = user
+                break
+        return user_entity
+
+    def _get_user_entity_slack(self, user_id: str) -> UserEntity:
+        user_entity = UserEntity
+        for user in self._users_list_slack:
             if user.id == user_id:
                 user_entity = user
                 break

@@ -13,14 +13,20 @@ class MessagesService:
         self.mm_upload_msg = mattermost_upload_messages
 
     def save_reply_to_mattermost(self, message: dict):
+        username = ""
         if "user" not in message:
             self._logger_bot.info(message)
             user_id = message["bot_id"]
+            if "username" in message:
+                username = message["username"]
         else:
             user_id = message["user"]
         if not self._config_service.is_allowed_user(self._find_user_name_by_key(user_id)):
             return
         user_dict = self._get_user_item(user_id)
+        if username:
+            user_dict["name"] = username
+            user_dict["display_name"] = username
         users_mentions = self._extract_users_from_message(message["text"])
 
         message["text"] = self.replace_mentions(message["text"])
@@ -74,14 +80,20 @@ class MessagesService:
             self._delete_file(message_dict["files"])
 
     def save_messages_to_dict(self, message: dict):
+        username = ""
         if "user" not in message:
             self._logger_bot.info(message)
             user_id = message["bot_id"]
+            if "username" in message:
+                username = message["username"]
         else:
             user_id = message["user"]
         if not self._config_service.is_allowed_user(self._find_user_name_by_key(user_id)):
             return
         user_dict = self._get_user_item(user_id)
+        if username:
+            user_dict["name"] = username
+            user_dict["display_name"] = username
         users_mentions = self._extract_users_from_message(message["text"])
 
         message["text"] = self.replace_mentions(message["text"])
@@ -116,11 +128,14 @@ class MessagesService:
             users_mentions = []
             for attachment in attachments:
                 users_mentions.extend(self._extract_users_from_message(message["text"]))
+                attachment_text = ""
+                if "text" in attachment:
+                    attachment_text = attachment["text"]
                 if "author_id" in attachment:
 
                     message_dict["text"] = message_dict["text"] + \
                                            f'>>> <@{attachment["author_id"]}> ' \
-                                           f'{attachment["text"]} \n'
+                                           f'{attachment_text} \n'
                     message_dict["text"] = self.replace_mentions(message_dict["text"])
                 else:
                     self._logger_bot.info("Message without author_id: %s", attachment)
@@ -133,24 +148,33 @@ class MessagesService:
         if message_dict["is_thread"]:
             reply_list = []
             for reply_message in message["reply"]:
+                reply_username = ""
+                if "user" not in reply_message:
+                    self._logger_bot.info(reply_message)
+                    reply_user_id = reply_message["bot_id"]
+                    if "username" in reply_message:
+                        reply_username = reply_message["username"]
+                else:
+                    reply_user_id = reply_message["user"]
+                reply_user_dict = self._get_user_item(reply_user_id)
+                if reply_username:
+                    reply_user_dict["name"] = reply_username
+                    reply_user_dict["display_name"] = reply_username
+
                 users_mentions.extend(self._extract_users_from_message(reply_message["text"]))
                 reply_dict = {"text": self.replace_mentions(reply_message["text"]),
-                              "user_id": reply_message["user"],
+                              "user_id": reply_user_id,
                               "user":
                                   {
-                                      "user_id": reply_message["user"],
-                                      "user_name": self._users_list.get(reply_message["user"], {}).get("name"),
-                                      "user_email": self._users_list.get(reply_message["user"], {}).get("email"),
-                                      "user_title": self._users_list.get(reply_message["user"], {}).get("title"),
-                                      "user_is_bot": self._users_list.get(reply_message["user"], {}).get("is_bot"),
-                                      "user_first_name": self._users_list.get(reply_message["user"], {}).get(
-                                          "first_name"),
-                                      "user_last_name": self._users_list.get(reply_message["user"], {}).get(
-                                          "last_name"),
-                                      "user_is_deleted": self._users_list.get(reply_message["user"], {}).get(
-                                          "is_deleted"),
-                                      "user_display_name": self._users_list.get(reply_message["user"], {}).get(
-                                          "display_name")},
+                                      "user_id": reply_user_id,
+                                      "user_name": reply_user_dict.get("name"),
+                                      "user_email": reply_user_dict.get("email"),
+                                      "user_title": reply_user_dict.get("title"),
+                                      "user_is_bot": reply_user_dict.get("is_bot"),
+                                      "user_first_name": reply_user_dict.get("first_name"),
+                                      "user_last_name": reply_user_dict.get("last_name"),
+                                      "user_is_deleted": reply_user_dict.get("is_deleted"),
+                                      "user_display_name": reply_user_dict.get("display_name")},
                               "channel":
                                   {"channel_id": message["channel"],
                                    "channel_name": self._channels_list.get(message["channel"], {}).get("name"),
@@ -187,8 +211,9 @@ class MessagesService:
 
     def _find_user_name_by_key(self, key) -> str:
         user_name = key
-        if self._logger_bot.info(self._users_list.get(key)):
-            user_name = self._users_list.get(key)["name"]
+
+        if self._users_list.get(key):
+            user_name = self._users_list[key]["name"]
 
         return user_name
 
@@ -204,7 +229,7 @@ class MessagesService:
     def get_users_list(self) -> dict:
         return self._users_list
 
-    def set_users_list(self, users_list):
+    def set_users_list(self, users_list: dict):
         self._users_list = users_list
 
     def get_channels_list(self) -> dict:
@@ -214,10 +239,13 @@ class MessagesService:
         self._channels_list = channels_list
 
     def replace_user_function(self, match):
+        user_name = ""
         matched_text = match.group(0)
         matched_text = matched_text[2:len(matched_text) - 1]
+        self._logger_bot.info(f'Matched text - {matched_text}')
         user_data = self._users_list.get(matched_text)
-        user_name = user_data["name"]
+        if user_data:
+            user_name = user_data["name"]
         if user_name == '' or user_name is None:
             user_name = match.group(0)
         else:

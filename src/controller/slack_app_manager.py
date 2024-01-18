@@ -2,7 +2,7 @@ import sys
 
 import requests
 from slack_bolt import App
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from slack_bolt.adapter.flask import SlackRequestHandler
 
 from src.controller.config_dto_schema import ConfigDTOSchema
@@ -12,13 +12,7 @@ from src.util.common_counter import CommonCounter
 from datetime import datetime
 
 
-
-
-
 class SlackAppManager:
-    CLIENT_ID = '6142429596385.6115727799111'
-    CLIENT_SECRET = '509c51a216bba918f7c5039a18135a3f'
-    REDIRECT_URI = 'https://0352-37-252-13-233.ngrok-free.app/auth/redirect'
 
     def __init__(self, config_service, slack_load_messages, mattermost_upload_messages, pin_service,
                  bookmark_service, thread_service, user_service):
@@ -30,6 +24,8 @@ class SlackAppManager:
         bot_token = self._settings.slack_bot_token
         app_token = self._settings.slack_app_token
         signing_secret = self._settings.slack_signing_secret
+        self._client_id = self._settings.slack_client_id
+        self._client_secret = self._settings.slack_client_secret
         self.app = App(token=bot_token, signing_secret=signing_secret)
         self.app.client.apps_connections_open(app_token=app_token)
         self.flask_app = Flask(__name__)
@@ -42,7 +38,7 @@ class SlackAppManager:
         self._set_excluded_users_command = self._settings.set_excluded_users_command
         self._set_date_sync_command = self._settings.set_date_sync_command
         self._start_integration_command = self._settings.start_integration_command
-        self._give_access = "/give_access"
+        self._start_dm_integration_command = self._settings.start_dm_integration_command
         self._thread_update = "/thread_update"
         self._sync_users_command = self._settings.sync_users_command
         self._mattermost_upload_messages = mattermost_upload_messages
@@ -62,11 +58,11 @@ class SlackAppManager:
             print(request.args)
             code = request.args.get('code')
             # Обмениваем код на токен доступа
-            token = self.exchange_code_for_token(code)
-            print(token)
-            # Здесь можно сохранить токен или выполнить другие действия
+            user_data = {}
+            user_data = self.exchange_code_for_token(code)
+            self.start_integration_dm(user_data)
+            return CommonCounter.get_str_statistic()
 
-    #            return redirect("https://your_redirect_url", code=302)
 
     def register_commands(self):
         self.app.command(self._get_config_command)(self.get_config)
@@ -75,7 +71,7 @@ class SlackAppManager:
         self.app.command(self._set_date_sync_command)(self.set_date_integration)
         self.app.command(self._start_integration_command)(self.start_integration)
         self.app.command(self._sync_users_command)(self.sync_users)
-        self.app.command(self._give_access)(self.give_access)
+        self.app.command(self._start_dm_integration_command)(self.start_dm_integration)
         self.app.command(self._thread_update)(self.thread_update)
 
     def thread_update(self, ack, respond, command):
@@ -111,23 +107,37 @@ class SlackAppManager:
 
         respond("Updating threads finished")
 
-        pass
-    def exchange_code_for_token(self, code):
+    def exchange_code_for_token(self, code) -> dict:
+        user_data = {}
         url = 'https://slack.com/api/oauth.v2.access'
         data = {
-            'client_id': self.CLIENT_ID,
-            'client_secret': self.CLIENT_SECRET,
+            'client_id': self._client_id,
+            'client_secret': self._client_secret,
             'code': code
         }
         response = requests.post(url, data=data)
-        access_token = response.json().get("authed_user").get("access_token")
-        return access_token
+        self.logger_bot.info(f'Response: {response.json()}')
+        user_data["access_token"] = response.json().get("authed_user").get("access_token")
+        user_data["id"] = response.json().get("authed_user").get("id")
+        self.logger_bot.info(f'User data: {user_data}')
+        return user_data
 
-    def give_access(self, ack, respond, command):
+    def start_dm_integration(self, ack, respond, command):
         ack()
+
+        command_params = command['text']
+        self.logger_bot.info("Transfer direct messages started")
+        if len(command_params) != 0:
+            self.logger_bot.info("Got command option - %s", command_params)
+            self._load_messages.set_direct_channels_filter(command_params)
+        else:
+            self.logger_bot.info("Transfer messages is canceled: no params")
+            respond("Transfer messages is canceled: no params")
+            return
+
         user_id = command["user_id"]
         # Генерируем ссылку для предоставления разрешения
-        authorize_url = (f'https://slack.com/oauth/v2/authorize?client_id={self.CLIENT_ID}&'
+        authorize_url = (f'https://slack.com/oauth/v2/authorize?client_id={self._client_id}&'
                          f'scope='
                          f'channels:history,'
                          f'links:read,'
@@ -135,6 +145,8 @@ class SlackAppManager:
                          f'mpim:history,'
                          f'im:read,'
                          f'mpim:read,'
+                         f'users:read,'
+                         f'users:read.email,'
                          f'files:read&'
                          f'user_scope='
                          f'channels:history,'
@@ -143,9 +155,15 @@ class SlackAppManager:
                          f'mpim:history,'
                          f'im:read,'
                          f'mpim:read,'
-                         f'files:read&user={user_id}')
+                         f'users:read,'
+                         f'users:read.email,'
+                         f'groups:read,'
+                         f'groups:history,'
+                         f'stars:read,'
+                         f'files:read&' 
+                         f'user={user_id}')
         respond(
-            f'Вам нужно предоставить разрешение на доступ к вашему приложению. <{authorize_url}|Предоставить разрешение>')
+            f'Вам нужно предоставить разрешение на доступ к вашему приложению.\n {authorize_url}')
         # Отправляем сообщение с ссылкой в канал пользователя
 
     def sync_users(self, ack, respond, command):
@@ -228,14 +246,12 @@ class SlackAppManager:
         self._mattermost_upload_messages.set_channel_filter(command_params)
         self._pin_service.set_channel_filter(command_params)
         self._bookmark_service.set_channel_filter(command_params)
-#        self._thread_service.set_channel_filter(command_params)
 
         self._mattermost_upload_messages.load_users()
         self._mattermost_upload_messages.load_channels()
         self._mattermost_upload_messages.load_team_id()
 
-        self._load_messages.load_channel_messages()
-#        self._thread_service.process()
+        self._load_messages.load_channel_messages(["public", "private"])
         self._pin_service.pins_process()
         self._bookmark_service.bookmarks_process()
 
@@ -244,6 +260,26 @@ class SlackAppManager:
         self.logger_bot.info("Transfer messages finished")
 
         respond("Transfer messages finished")
+
+    def start_integration_dm(self, user_data: dict):
+
+        user_id = user_data["id"]
+        CommonCounter.init_counter()
+        self._load_messages.set_user_token(user_data["access_token"])
+        self._load_messages.set_initial_user(user_id)
+
+        self._user_service.load_mattermost()
+        self._user_service.load_slack()
+        self._user_service.load_team()
+        self._mattermost_upload_messages.load_team_id()
+        self._mattermost_upload_messages.set_main_slack_user_id(user_id)
+        self._load_messages.load_channel_messages("direct")
+#        self._pin_service.pins_process()
+#        self._bookmark_service.bookmarks_process()
+
+        self.logger_bot.info(CommonCounter.get_str_statistic())
+
+        self.logger_bot.info("Transfer direct messages finished")
 
     def run(self, port=3005):
         self.flask_app.run(port=port, host="0.0.0.0", debug=False)
