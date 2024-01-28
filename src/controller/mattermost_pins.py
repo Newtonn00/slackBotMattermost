@@ -23,7 +23,7 @@ class MattermostPins:
                                message_ts=data["props"]["slack_ts"])
         return pin_entity
 
-    def load(self, channel_id) -> List[PinEntity]:
+    def load(self, channel_id, session_id: str) -> List[PinEntity]:
         pin_entity_list: List[PinEntity] = []
         response = ''
         pin_dict = {}
@@ -38,19 +38,19 @@ class MattermostPins:
             response.raise_for_status()
             pin_dict = response.json()["posts"]
 
-            self._logger_bot.info("Mattermost pins loaded (%d)", len(pin_dict))
+            self._logger_bot.info(f'Mattermost pins loaded ({len(pin_dict)})|Session: {session_id}')
 
         except HTTPError as err:
             self._logger_bot.error(
                 f'Mattermost API Error (channels/pinned). Status code: {response.status_code} '
-                f'Response:{response.text} Error: {err}')
-            CommonCounter.increment_error()
+                f'Response:{response.text} Error: {err} Session:{session_id}')
+            CommonCounter.increment_error(session_id)
 
         for key, pin in pin_dict.items():
             pin_entity_list.append(self._map_dict_to_pin_entity(pin))
         return pin_entity_list
 
-    def unpin(self, post_id):
+    def unpin(self, post_id, session_id: str):
 
         response = ''
         try:
@@ -58,27 +58,29 @@ class MattermostPins:
                 f'{self._mm_web_client.mattermost_url}/posts/{post_id}/unpin')
             response.raise_for_status()
             data = response.json()
-            self._logger_bot.info("Mattermost post %s unpinned", post_id)
+            self._logger_bot.info(f'Mattermost post {post_id} unpinned|Session:{session_id}' )
 
-        except HTTPError:
+        except HTTPError as err:
             self._logger_bot.error(
-                f'Mattermost API Error (posts/unpin). Status code: {response.status_code} Response:{response.text}')
-            CommonCounter.increment_error()
+                f'Mattermost API Error (posts/unpin). Status code: {response.status_code} '
+                f'Response:{response.text} Error:{err} Session:{session_id}')
+            CommonCounter.increment_error(session_id)
 
-    def pin(self, post_id: str):
+    def pin(self, post_id: str, session_id: str):
         response = ''
         try:
             response = self._mm_web_client.mattermost_session.post(
                 f'{self._mm_web_client.mattermost_url}/posts/{post_id}/pin')
             response.raise_for_status()
             data = response.json()
-            self._logger_bot.info("Mattermost post %s pinned", post_id)
-            CommonCounter.increment_pin()
+            self._logger_bot.info(f'Mattermost post {post_id} pinned|Session:{session_id}')
+            CommonCounter.increment_pin(session_id)
 
-        except HTTPError:
+        except HTTPError as err:
             self._logger_bot.error(
-                f'Mattermost API Error (posts/pin). Status code: {response.status_code} Response:{response.text}')
-            CommonCounter.increment_error()
+                f'Mattermost API Error (posts/pin). Status code: {response.status_code} '
+                f'Response:{response.text} Error:{err} Session:{session_id}')
+            CommonCounter.increment_error(session_id)
 
     def get_message_id_by_ts(self, messages_dict: dict, ts: str) -> str:
         post_id = ''

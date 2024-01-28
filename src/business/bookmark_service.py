@@ -10,15 +10,14 @@ class BookmarkService:
     _mm_channels_list: list
     _slack_load_pins = None
 
-    def __init__(self, slack_load_bookmarks, mattermost_bookmarks, mattermost_upload_messages):
+    def __init__(self, slack_load_bookmarks, mattermost_bookmarks):
         self._slack_load_bookmarks = slack_load_bookmarks
         self._mattermost_bookmarks = mattermost_bookmarks
-        self._mattermost_upload_messages = mattermost_upload_messages
         self._channel_filter = []
         self._logger_bot = logging.getLogger("")
+        self._session_id = None
 
     def bookmarks_process(self):
-        self.set_mm_channels_list(self._mattermost_upload_messages.get_channel_list())
         self._apply_filter_to_mm_channel()
         self._apply_filter_to_slack_channel()
         for channel_key, channel_item in self._slack_channels_list.items():
@@ -37,7 +36,7 @@ class BookmarkService:
 
             if slack_bookmark_list:
                 bookmark_data = self._collect_bookmarks_data(slack_bookmark_list)
-                self._mattermost_bookmarks.update_channel_header(bookmark_data, mm_channel_id)
+                self._mattermost_bookmarks.update_channel_header(bookmark_data, mm_channel_id, self._session_id)
 
     def _collect_bookmarks_data(self, bookmark_list: List[BookmarkEntity]) -> str:
         bookmark_data: str = ""
@@ -47,7 +46,7 @@ class BookmarkService:
 
     def _get_slack_bookmarks(self, channel_key) -> list[BookmarkEntity]:
         bookmark_entity: List[BookmarkEntity]
-        bookmark_entity = self._slack_load_bookmarks.load_bookmarks(channel_key)
+        bookmark_entity = self._slack_load_bookmarks.load_bookmarks(channel_key, self._session_id)
         return bookmark_entity
 
     def set_slack_channels_list(self, channels_list):
@@ -91,3 +90,6 @@ class BookmarkService:
             if channel["name"] in self._channel_filter:
                 filtered_channels.append(channel)
         self._mm_channels_list = filtered_channels
+
+    def set_session_id(self, session_id):
+        self._session_id = session_id

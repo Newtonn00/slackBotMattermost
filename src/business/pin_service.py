@@ -11,13 +11,13 @@ class PinService:
     _mm_channels_list: list
     _slack_load_pins = None
 
-    def __init__(self, slack_load_pins, mattermost_upload_pins, mattermost_upload_messages, mattermost_messages):
+    def __init__(self, slack_load_pins, mattermost_upload_pins, mattermost_messages):
         self._slack_load_pins = slack_load_pins
         self._mattermost_pins = mattermost_upload_pins
-        self._mattermost_upload_messages = mattermost_upload_messages
         self._mattermost_messages = mattermost_messages
         self._channel_filter = []
         self._logger_bot = logging.getLogger("")
+        self._session_id = None
 
     def set_slack_channels_list(self, channels_list):
         self._slack_channels_list = channels_list
@@ -26,7 +26,6 @@ class PinService:
         self._mm_channels_list = channels_list
 
     def pins_process(self):
-        self.set_mm_channels_list(self._mattermost_upload_messages.get_channel_list())
         self._apply_filter_to_mm_channel()
         self._apply_filter_to_slack_channel()
 
@@ -38,20 +37,20 @@ class PinService:
                 mm_channel_id = mm_channel_item.get("id")
             else:
                 self._logger_bot.info(f'Channel {channel_item["name"]} not found in Mattermost')
-                CommonCounter.increment_error()
+                CommonCounter.increment_error(self._session_id)
                 break
 
             for pin in slack_pin_list:
                 pin.mm_channel_id = mm_channel_id
 
-            mm_pin_list = self._mattermost_pins.load(mm_channel_id)
+            mm_pin_list = self._mattermost_pins.load(mm_channel_id, self._session_id)
             for mm_pin in mm_pin_list:
                 msg_pinned = False
                 for slack_pin in slack_pin_list:
                     if mm_pin.message_ts == slack_pin.message_ts:
                         msg_pinned = True
                 if not msg_pinned:
-                    self._mattermost_pins.unpin(mm_pin.message_mm_id)
+                    self._mattermost_pins.unpin(mm_pin.message_mm_id, self._session_id)
 
             messages_for_pin = []
             for slack_pin in slack_pin_list:
@@ -63,16 +62,16 @@ class PinService:
                     messages_for_pin.append(slack_pin)
 
             if messages_for_pin:
-                messages_dict = self._mattermost_messages.load_messages(mm_channel_id)
+                messages_dict = self._mattermost_messages.load_messages(mm_channel_id, self._session_id)
                 for pin in messages_for_pin:
 
                     post_id = self._mattermost_pins.get_message_id_by_ts(messages_dict, pin.message_ts)
 
                     if post_id:
-                        self._mattermost_pins.pin(post_id)
+                        self._mattermost_pins.pin(post_id, self._session_id)
 
     def _get_pins(self, channel_id) -> List[PinEntity]:
-        pin_list = self._slack_load_pins.load_pins(channel_id=channel_id)
+        pin_list = self._slack_load_pins.load_pins(channel_id=channel_id, session_id=self._session_id)
         return pin_list
 
     def _get_mm_channel_id_by_name(self, channel_name: str) -> dict:
@@ -110,3 +109,6 @@ class PinService:
             if channel["name"] in self._channel_filter:
                 filtered_channels.append(channel)
         self._mm_channels_list = filtered_channels
+
+    def set_session_id(self, session_id):
+        self._session_id = session_id

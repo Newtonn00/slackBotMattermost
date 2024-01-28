@@ -5,12 +5,12 @@ from datetime import datetime
 
 
 class MessagesService:
-    def __init__(self, config_service, mattermost_upload_messages):
+    def __init__(self, config_service):
         self._logger_bot = logging.getLogger("")
         self._users_list = {}
         self._channels_list = {}
         self._config_service = config_service
-        self.mm_upload_msg = mattermost_upload_messages
+        self._mm_upload_msg = None
 
     def save_reply_to_mattermost(self, message: dict):
         username = ""
@@ -75,7 +75,7 @@ class MessagesService:
 
         message_dict["users_in_mentions"] = users_mentions_list
 
-        self.mm_upload_msg.upload_messages(message_dict)
+        self._mm_upload_msg.upload_messages(message_dict)
         if message_dict["is_attached"]:
             self._delete_file(message_dict["files"])
 
@@ -207,7 +207,7 @@ class MessagesService:
 
         message_dict["users_in_mentions"] = users_mentions_list
 
-        self.mm_upload_msg.upload_messages(message_dict)
+        self._mm_upload_msg.upload_messages(message_dict)
 
     def _find_user_name_by_key(self, key) -> str:
         user_name = key
@@ -336,4 +336,10 @@ class MessagesService:
                 os.remove(file["file_path"])
                 self._logger_bot.info("Deleted file %s from %s", file["file_name"],
                                       file["file_path"])
+
+    def set_mm_upload_messages_instance(self, mm_upload_msg):
+        self._mm_upload_msg = mm_upload_msg
+
+    def get_mm_upload_messages_instance(self):
+        return self._mm_upload_msg
 

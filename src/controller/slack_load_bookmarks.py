@@ -32,7 +32,7 @@ class SlackLoadBookmarks:
                                          link=data["link"])
         return bookmark_entity
 
-    def load_bookmarks(self, channel_id: str) -> List[BookmarkEntity]:
+    def load_bookmarks(self, channel_id: str, session_id: str) -> List[BookmarkEntity]:
         bookmarks = []
         try:
             max_retries = 3
@@ -57,11 +57,12 @@ class SlackLoadBookmarks:
                                     response={"error": f' Timeout error, {self.REQUEST_TIME_OUT}'})
         except SlackApiError as e:
             self._logger_bot.error(
-                f"SlackAPIError (bookmarks_list): {e.response['error']}")
-            CommonCounter.increment_error()
+                f"SlackAPIError (bookmarks_list): {e.response['error']} "
+                f"Session: {session_id}")
+            CommonCounter.increment_error(session_id)
 
-        self._logger_bot.info("Selected %d bookmarks from Slack channel_id %s", len(bookmarks),
-                              channel_id)
+        self._logger_bot.info(f"Selected {len(bookmarks)} bookmarks from Slack channel_id {channel_id} | "
+                              f"Session: {session_id}")
 
         bookmarks_entity: List[BookmarkEntity] = []
         for bookmark in bookmarks:

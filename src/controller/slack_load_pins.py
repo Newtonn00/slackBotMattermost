@@ -32,7 +32,7 @@ class SlackLoadPins:
                                message_ts=data["message"]["ts"])
         return pin_entity
 
-    def load_pins(self, channel_id: str) -> List[PinEntity]:
+    def load_pins(self, channel_id: str, session_id: str) -> List[PinEntity]:
         pinned_messages = []
         try:
             max_retries = 3
@@ -40,8 +40,8 @@ class SlackLoadPins:
 
             while retry_count < max_retries:
                 self._logger_bot.info(
-                    "Starting request to Slack (pins). %d times repeated",
-                    retry_count)
+                    f"Starting request to Slack (pins). {retry_count} times repeated | "
+                    f"Session: {session_id}")
                 response = self._web_client.pins_list(
                     channel=channel_id
                 )
@@ -58,11 +58,12 @@ class SlackLoadPins:
                                     response={"error": f' Timeout error, {self.REQUEST_TIME_OUT}'})
         except SlackApiError as e:
             self._logger_bot.error(
-                f"SlackAPIError (conversations_history): {e.response['error']}")
-            CommonCounter.increment_error()
+                f"SlackAPIError (conversations_history): {e.response['error']} "
+                f"Session: {session_id}")
+            CommonCounter.increment_error(session_id)
 
-        self._logger_bot.info("Selected %d pinned messages from Slack channel_id %s", len(pinned_messages),
-                              channel_id)
+        self._logger_bot.info(f"Selected {len(pinned_messages)} pinned messages from Slack channel_id channel_id | "
+                              f"Session: {session_id}")
 
         pin_entity: List[PinEntity] = []
         if "items" in pinned_messages:

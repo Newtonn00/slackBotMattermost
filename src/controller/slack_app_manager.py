@@ -1,39 +1,39 @@
+import aiohttp
 import asyncio
 from aiohttp import web
-
-import requests
-from slack_bolt import App
-from flask import Flask, request, jsonify
-from slack_bolt.adapter.flask import SlackRequestHandler
-
+from slack_bolt.async_app import AsyncApp
+from src.controller.async_slack_request_handler import AsyncSlackRequestHandler
 from src.controller.config_dto_schema import ConfigDTOSchema
 import logging
 from src.util.settings_parser import SettingsParser
 from src.util.common_counter import CommonCounter
 from datetime import datetime
+import secrets
 
 
 class SlackAppManager:
+    container = None
 
-    def __init__(self, config_service, slack_load_messages, mattermost_upload_messages, pin_service,
-                 bookmark_service, thread_service, user_service):
+    @classmethod
+    def set_container_instance(cls, container_instance):
+        cls.container = container_instance
+
+    def __init__(self, config_service, user_service):
         self.logger_bot = logging.getLogger("")
-
         self._mattermost_upload_messages_id = None
         self._mattermost_upload_messages_state = None
+
         self._settings = SettingsParser()
         bot_token = self._settings.slack_bot_token
-        app_token = self._settings.slack_app_token
+        self.app_token = self._settings.slack_app_token
         signing_secret = self._settings.slack_signing_secret
         self._client_id = self._settings.slack_client_id
         self._client_secret = self._settings.slack_client_secret
-        self.app = App(token=bot_token, signing_secret=signing_secret)
-        self.app.client.apps_connections_open(app_token=app_token)
-        self.flask_app = Flask(__name__)
-        self.handler = SlackRequestHandler(self.app)
+        self.app = AsyncApp(token=bot_token, signing_secret=signing_secret)
+        self.aiohttp_app = aiohttp.web.Application()
+        self.handler = AsyncSlackRequestHandler(self.app)
 
         self._config_service = config_service
-        self._load_messages = slack_load_messages
         self._get_config_command = self._settings.get_config_command
         self._set_excluded_channels_command = self._settings.set_excluded_channels_command
         self._set_excluded_users_command = self._settings.set_excluded_users_command
@@ -42,26 +42,30 @@ class SlackAppManager:
         self._start_dm_integration_command = self._settings.start_dm_integration_command
         self._thread_update = "/thread_update"
         self._sync_users_command = self._settings.sync_users_command
-        self._mattermost_upload_messages = mattermost_upload_messages
-        self._pin_service = pin_service
         self._user_service = user_service
-        self._bookmark_service = bookmark_service
-        self._thread_service = thread_service
         self.register_commands()
 
-    def slack_events(self):
-        return self.handler.handle(request)
+        self.aiohttp_app.router.add_post("/slack/events", self.slack_events)
+        self.aiohttp_app.router.add_get("/auth/redirect", self.auth_redirect)
+        self.user_session = {}
 
-    def auth_redirect(self):
+    async def slack_events(self, request_txt):
+        return await self.handler.handle(request_txt)
+
+    async def auth_redirect(self, request_txt):
         # Получаем код из параметра запроса
-        print(request.args)
-        code = request.args.get('code')
+        code = request_txt.query.get('code')
+        session_id = request_txt.query.get('state')
         # Обмениваем код на токен доступа
-        user_data = {}
-        user_data = self.exchange_code_for_token(code)
-        self.start_integration_dm(user_data)
-        return CommonCounter.get_str_statistic()
-
+        user_data = await self.exchange_code_for_token(code, session_id)
+        if session_id in self.user_session:
+            self.user_session[session_id]["access_token"] = user_data["access_token"]
+            self.user_session[session_id]["token_date_unix"] = datetime.now().timestamp()
+            self.start_integration_dm(self.user_session[session_id])
+            return aiohttp.web.Response(text=CommonCounter.get_str_statistic(session_id))
+        else:
+            self.logger_bot.info(f'Did`nt find session {session_id}')
+            return aiohttp.web.Response(text=f'Did`nt find session {session_id}\n Repeat, please')
 
     def register_commands(self):
         self.app.command(self._get_config_command)(self.get_config)
@@ -73,40 +77,51 @@ class SlackAppManager:
         self.app.command(self._start_dm_integration_command)(self.start_dm_integration)
         self.app.command(self._thread_update)(self.thread_update)
 
-    def thread_update(self, ack, respond, command):
-        ack()
-        respond("Updating threads started")
-        self.logger_bot.info("Updating threads started")
+    async def thread_update(self, ack, respond, command):
+        await ack()
+        session_id = secrets.token_urlsafe(16)
+        await respond("Updating threads started")
+        self.logger_bot.info(f'Updating threads started | Session: {session_id}')
         command_params = command['text']
         user_id = command["user_id"]
         if len(command_params) != 0:
-            self.logger_bot.info("Got command option - %s", command_params)
+            self.logger_bot.info(f'Got command option - {command_params} | Session: {session_id}')
         else:
-            self.logger_bot.info("Updating threads is canceled: no params")
-            respond("Updating thread is canceled: no params")
+            self.logger_bot.info(f'Updating threads is canceled: no params | Session: {session_id}')
+            await respond("Updating thread is canceled: no params")
             return
-        CommonCounter.init_counter()
 
-        self._load_messages.set_initial_user(user_id)
-        self._load_messages.set_channel_filter(command_params)
-        self._load_messages.load_channels()
-        self._load_messages.load_users()
-        self._mattermost_upload_messages.set_channel_filter(command_params)
-        self._thread_service.set_channel_filter(command_params)
-        self._thread_service.set_slack_channels_list(self._load_messages.get_channels_list())
-        self._thread_service.set_slack_users_list(self._load_messages.get_users_list())
+        CommonCounter.init_counter(session_id)
+        slack_load_messages_instance = self.container.slack_load_messages()
+        mm_upload_messages_instance = self.container.mattermost_upload_messages()
+        thread_service_instance = self.container.thread_service()
 
-        self._mattermost_upload_messages.load_users()
-        self._mattermost_upload_messages.load_channels()
-        self._mattermost_upload_messages.load_team_id()
-        self._thread_service.process()
-        self.logger_bot.info(CommonCounter.get_str_statistic())
+        slack_load_messages_instance.set_session_id(session_id)
+        mm_upload_messages_instance.set_session_id(session_id)
+        thread_service_instance.set_session_id(session_id)
 
-        self.logger_bot.info("Updating threads finished")
+        slack_load_messages_instance.set_mm_upload_msg_instance(mm_upload_messages_instance)
+        slack_load_messages_instance.set_initial_user(user_id)
+        slack_load_messages_instance.set_channel_filter(command_params)
+        slack_load_messages_instance.load_channels()
 
-        respond("Updating threads finished")
+        mm_upload_messages_instance.set_channel_filter(command_params)
+        thread_service_instance.set_slack_users_list(slack_load_messages_instance.get_channels_list())
+        thread_service_instance.set_channel_filter(command_params)
+        thread_service_instance.set_slack_channels_list(slack_load_messages_instance.get_channels_list())
+        thread_service_instance.set_slack_users_list(slack_load_messages_instance.get_users_list())
+        mm_upload_messages_instance.load_channels()
+        mm_upload_messages_instance.load_team_id()
 
-    def exchange_code_for_token(self, code) -> dict:
+        thread_service_instance.set_mm_channels_list(mm_upload_messages_instance.get_channel_list())
+        thread_service_instance.process()
+        self.logger_bot.info(CommonCounter.get_str_statistic(session_id))
+
+        self.logger_bot.info(f'Updating threads finished | Session:{session_id}')
+
+        await respond("Updating threads finished")
+
+    async def exchange_code_for_token(self, code, session_id) -> dict:
         user_data = {}
         url = 'https://slack.com/api/oauth.v2.access'
         data = {
@@ -114,78 +129,129 @@ class SlackAppManager:
             'client_secret': self._client_secret,
             'code': code
         }
-        response = requests.post(url, data=data)
-        self.logger_bot.info(f'Response: {response.json()}')
-        user_data["access_token"] = response.json().get("authed_user").get("access_token")
-        user_data["id"] = response.json().get("authed_user").get("id")
-        self.logger_bot.info(f'User data: {user_data}')
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=data) as response:
+                response_json = await response.json()
+                self.logger_bot.info(f'Response: {response_json} | Session: {session_id}')
+                if not response_json["ok"]:
+                    self.logger_bot.info(f'Exchange code {code} error: {response_json["error"]} | Session: {session_id}')
+                else:
+                    user_data["access_token"] = response_json.get("authed_user").get("access_token")
+                    user_data["id"] = response_json.get("authed_user").get("id")
+                    #self.logger_bot.info(f'User data: {user_data}')
         return user_data
 
-    def start_dm_integration(self, ack, respond, command):
-        ack()
+    async def start_dm_integration(self, ack, respond, command):
+        await ack()
 
         command_params = command['text']
-        self.logger_bot.info("Transfer direct messages started")
+        session_id = secrets.token_urlsafe(16)
+        self.logger_bot.info(f'Session ID is created - {session_id}')
         if len(command_params) != 0:
-            self.logger_bot.info("Got command option - %s", command_params)
-            self._load_messages.set_direct_channels_filter(command_params)
+            self.logger_bot.info(f'Got command option - {command_params} | Session:{session_id}')
         else:
-            self.logger_bot.info("Transfer messages is canceled: no params")
-            respond("Transfer messages is canceled: no params")
+            self.logger_bot.info(f'Transfer messages is canceled: no params | Session:{session_id}')
+            await respond("Transfer messages is canceled: no params")
             return
 
         user_id = command["user_id"]
-        # Генерируем ссылку для предоставления разрешения
-        authorize_url = (f'https://slack.com/oauth/v2/authorize?client_id={self._client_id}&'
-                         f'scope='
-                         f'channels:history,'
-                         f'links:read,'
-                         f'im:history,'
-                         f'mpim:history,'
-                         f'im:read,'
-                         f'mpim:read,'
-                         f'users:read,'
-                         f'users:read.email,'
-                         f'files:read&'
-                         f'user_scope='
-                         f'channels:history,'
-                         f'links:read,'
-                         f'im:history,'
-                         f'mpim:history,'
-                         f'im:read,'
-                         f'mpim:read,'
-                         f'users:read,'
-                         f'users:read.email,'
-                         f'groups:read,'
-                         f'groups:history,'
-                         f'stars:read,'
-                         f'files:read&' 
-                         f'user={user_id}')
-        respond(
-            f'Вам нужно предоставить разрешение на доступ к вашему приложению.\n {authorize_url}')
+        user_sessions = []
+
+        for session_key, session_data in self.user_session.items():
+            if session_data.get("user_id") == user_id:
+                user_sessions.append(session_data)
+
+        for user_session_data in user_sessions:
+            if user_session_data["access_token"] and datetime.now().timestamp() - user_session_data["token_date_unix"] < 3600:
+                self.user_session = {
+                    session_id: {
+                        "user_id": user_id,
+                        "command_params": command_params,
+                        "session_id": session_id,
+                        "access_token": user_session_data["access_token"],
+                        "token_date_unix": datetime.now().timestamp(),
+                        "status": "open"
+                    }
+                }
+                break
+        if self.user_session.get(session_id):
+            await respond("Transfer messages started")
+            self.logger_bot.info(f'Transfer messages started | Session: {session_id}')
+            self.start_integration_dm(self.user_session[session_id])
+            await respond("Transfer messages finished")
+
+        else:
+
+            # Генерируем ссылку для предоставления разрешения
+            authorize_url = (f'https://slack.com/oauth/v2/authorize?client_id={self._client_id}&'
+                             f'scope='
+                             f'channels:history,'
+                             f'links:read,'
+                             f'im:history,'
+                             f'mpim:history,'
+                             f'im:read,'
+                             f'mpim:read,'
+                             f'users:read,'
+                             f'users:read.email,'
+                             f'files:read&'
+                             f'user_scope='
+                             f'channels:history,'
+                             f'links:read,'
+                             f'im:history,'
+                             f'mpim:history,'
+                             f'im:read,'
+                             f'mpim:read,'
+                             f'users:read,'
+                             f'users:read.email,'
+                             f'groups:read,'
+                             f'groups:history,'
+                             f'stars:read,'
+                             f'im:write,'
+                             f'chat:write,'
+                             f'files:read&'
+                             f'state={session_id}&'
+                             f'user={user_id}')
+
+            self.user_session = {
+                session_id: {
+                    "user_id": user_id,
+                    "command_params": command_params,
+                    "session_id": session_id,
+                    "status": "open",
+                    "access_token": "",
+                    "token_date_unix": 0
+
+            }
+        }
+
+            await respond(
+                f'Вам нужно предоставить разрешение на доступ к вашему приложению.\n {authorize_url}')
         # Отправляем сообщение с ссылкой в канал пользователя
 
-    def sync_users(self, ack, respond, command):
-        ack()
-        self.logger_bot.info("Sync users started")
-        respond("Sync users started")
+    async def sync_users(self, ack, respond, command):
+        await ack()
+        session_id = secrets.token_urlsafe(16)
+        self.logger_bot.info(f'Sync users started | Session: {session_id}')
+        await respond("Sync users started")
         command_params = command['text']
         self._user_service.set_params(command_params)
-        self._user_service.sync_process()
-        self.logger_bot.info("Sync users finished")
-        respond("Sync users finished")
+        self._user_service.sync_process(session_id)
+        self.logger_bot.info(f'Sync users finished | Session: {session_id}')
+        await respond("Sync users finished")
 
-    def get_config(self, ack, respond, command):
-        ack()
-        self.logger_bot.info("Config selection started")
+    async def get_config(self, ack, respond, command):
+        await ack()
+        session_id = secrets.token_urlsafe(16)
+        self.logger_bot.info(f'Config selection started | Session: {session_id}')
         config_entity = self._config_service.get_config()
         config_schema = ConfigDTOSchema()
         config_json = config_schema.dumps(obj=config_entity)
-        self.logger_bot.info("Config selection finished")
-        respond(config_json)
+        self.logger_bot.info(f'Config selection finished | Session: {session_id}')
+        await respond(config_json)
 
-    def set_excluded_channels(self, ack, respond, command):
-        ack()
+    async def set_excluded_channels(self, ack, respond, command):
+        await ack()
         command_params = command['text']
         self.logger_bot.info("Channels setting started")
         if len(command_params) != 0:
@@ -194,10 +260,10 @@ class SlackAppManager:
         config_schema = ConfigDTOSchema()
         config_json = config_schema.dump(obj=new_config_entity)
         self.logger_bot.info("Channels setting finished")
-        respond("Channels setting finished")
+        await respond("Channels setting finished")
 
-    def set_excluded_users(self, ack, respond, command):
-        ack()
+    async def set_excluded_users(self, ack, respond, command):
+        await ack()
         command_params = command['text']
         self.logger_bot.info("Users setting started")
         if len(command_params) != 0:
@@ -206,10 +272,10 @@ class SlackAppManager:
         config_schema = ConfigDTOSchema()
         config_json = config_schema.dump(obj=new_config_entity)
         self.logger_bot.info("Users setting finished")
-        respond("Users setting finished")
+        await respond("Users setting finished")
 
-    def set_date_integration(self, ack, respond, command):
-        ack()
+    async def set_date_integration(self, ack, respond, command):
+        await ack()
         command_params = command['text']
 
         self.logger_bot.info("Date setting started")
@@ -221,82 +287,106 @@ class SlackAppManager:
                 channel_name=params[0])
         else:
             self.logger_bot.info("Date setting is canceled: no params")
-            respond("Date setting is canceled: no params")
+            await respond("Date setting is canceled: no params")
             return
         self.logger_bot.info("Date setting finished")
-        respond("Date setting finished")
+        await respond("Date setting finished")
 
-    def start_integration(self, ack, respond, command):
+    async def start_integration(self, ack, respond, command):
         ack()
-        respond("Transfer messages started")
-        self.logger_bot.info("Transfer messages started")
+        session_id = secrets.token_urlsafe(16)
+        await respond("Transfer messages started")
+        self.logger_bot.info(f'Transfer messages started | Session: {session_id}')
         command_params = command['text']
         user_id = command["user_id"]
         if len(command_params) != 0:
-            self.logger_bot.info("Got command option - %s", command_params)
+            self.logger_bot.info(f'Got command option - {command_params} | Session: {session_id}')
         else:
-            self.logger_bot.info("Transfer messages is canceled: no params")
-            respond("Transfer messages is canceled: no params")
+            self.logger_bot.info(f'Transfer messages is canceled: no params | Session: {session_id}')
+            await respond("Transfer messages is canceled: no params")
             return
-        CommonCounter.init_counter()
+        CommonCounter.init_counter(session_id)
 
-        self._load_messages.set_initial_user(user_id)
-        self._load_messages.set_channel_filter(command_params)
-        self._mattermost_upload_messages.set_channel_filter(command_params)
-        self._pin_service.set_channel_filter(command_params)
-        self._bookmark_service.set_channel_filter(command_params)
+        slack_load_messages_instance = self.container.slack_load_messages()
+        mm_upload_messages_instance = self.container.mattermost_upload_messages()
+        pin_service_instance = self.container.pin_service()
+        bookmark_service_instance = self.container.bookmark_service()
 
-        self._mattermost_upload_messages.load_users()
-        self._mattermost_upload_messages.load_channels()
-        self._mattermost_upload_messages.load_team_id()
+        slack_load_messages_instance.set_mm_upload_msg_instance(mm_upload_messages_instance)
+        slack_load_messages_instance.set_container_instance(self.container)
+        slack_load_messages_instance.set_session_id(session_id)
+        mm_upload_messages_instance.set_session_id(session_id)
+        pin_service_instance.set_session_id(session_id)
+        bookmark_service_instance.set_session_id(session_id)
 
-        self._load_messages.load_channel_messages(["public", "private"])
-        self._pin_service.pins_process()
-        self._bookmark_service.bookmarks_process()
+        slack_load_messages_instance.set_initial_user(user_id)
+        slack_load_messages_instance.set_channel_filter(command_params)
+        mm_upload_messages_instance.set_channel_filter(command_params)
+        pin_service_instance.set_channel_filter(command_params)
+        bookmark_service_instance.set_channel_filter(command_params)
 
-        self.logger_bot.info(CommonCounter.get_str_statistic())
+        #        mm_upload_messages_instance.load_users()
 
-        self.logger_bot.info("Transfer messages finished")
+        mm_upload_messages_instance.load_channels()
+        mm_upload_messages_instance.load_team_id()
 
-        respond("Transfer messages finished")
+        slack_load_messages_instance.load_channel_messages(["public", "private"])
+        pin_service_instance.set_mm_channels_list(mm_upload_messages_instance.get_channel_list())
+        pin_service_instance.set_slack_channels_list(slack_load_messages_instance.get_channels_list())
+        pin_service_instance.pins_process()
+        bookmark_service_instance.set_mm_channels_list(mm_upload_messages_instance.get_channel_list())
+        bookmark_service_instance.set_slack_channels_list(slack_load_messages_instance.get_channels_list())
+        bookmark_service_instance.bookmarks_process()
 
-    def start_integration_dm(self, user_data: dict):
+        self.logger_bot.info(CommonCounter.get_str_statistic(session_id))
 
-        user_id = user_data["id"]
-        CommonCounter.init_counter()
-        self._load_messages.set_user_token(user_data["access_token"])
-        self._load_messages.set_initial_user(user_id)
+        self.logger_bot.info(f'Transfer messages finished | Session: {session_id}')
 
-        self._user_service.load_mattermost()
-        self._user_service.load_slack()
-        self._user_service.load_team()
-        self._mattermost_upload_messages.load_team_id()
-        self._mattermost_upload_messages.set_main_slack_user_id(user_id)
-        self._load_messages.load_channel_messages("direct")
-#        self._pin_service.pins_process()
-#        self._bookmark_service.bookmarks_process()
+        await respond("Transfer messages finished")
 
-        self.logger_bot.info(CommonCounter.get_str_statistic())
+    def start_integration_dm(self, user_session_data: dict):
 
-        self.logger_bot.info("Transfer direct messages finished")
+        user_id = user_session_data["user_id"]
+        session_id = user_session_data["session_id"]
+        slack_load_messages_instance = self.container.slack_load_messages()
+        mm_upload_messages_instance = self.container.mattermost_upload_messages()
 
-    async def run_async_app(self):
+        slack_load_messages_instance.set_mm_upload_msg_instance(mm_upload_messages_instance)
+        slack_load_messages_instance.set_container_instance(self.container)
 
-        app = web.Application()
-        app.router.add_post("/slack/events",)
-        app.router.add_get("/auth/redirect",)
+        slack_load_messages_instance.set_session_id(session_id)
+        mm_upload_messages_instance.set_session_id(session_id)
 
-        # Запускаем приложение
-        runner = web.AppRunner(app)
+        slack_load_messages_instance.set_user_token(user_session_data["access_token"])
+        slack_load_messages_instance.set_initial_user(user_id)
+        slack_load_messages_instance.set_direct_channels_filter(user_session_data["command_params"])
+
+        self._user_service.load_mattermost(session_id)
+        self._user_service.load_slack(session_id)
+        self._user_service.load_team(session_id)
+        mm_upload_messages_instance.load_team_id()
+        mm_upload_messages_instance.set_main_slack_user_id(user_id)
+        slack_load_messages_instance.load_channel_messages("direct")
+
+        self.logger_bot.info(CommonCounter.get_str_statistic(session_id))
+
+        self.logger_bot.info(f'Transfer direct messages finished | Session: {session_id}')
+
+    async def run(self, port=3005):
+
+        await self.app.client.apps_connections_open(app_token=self.app_token)
+        # Создаем экземпляр AppRunner
+        runner = web.AppRunner(self.aiohttp_app)
         await runner.setup()
-        site = web.TCPSite(runner, host="0.0.0.0", port=3005)
+
+        # Создаем экземпляр TCPSite
+        site = web.TCPSite(runner, '0.0.0.0', 3005)
+
         await site.start()
 
-        # Ожидаем завершения работы приложения
-        await runner.cleanup()
+        self.logger_bot.info("Slack bot version 2.0 started")
 
-    def run(self, port=3005):
-        self.flask_app.run(port=port, host="0.0.0.0", debug=False)
-
-
-#        self.app.start(port=port)
+        try:
+            await asyncio.Event().wait()  # Run until interrupted
+        finally:
+            await runner.cleanup()

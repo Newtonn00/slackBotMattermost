@@ -2,6 +2,7 @@ import logging
 
 from requests import HTTPError
 
+from src.entity.user_entity import UserEntity
 from src.util.common_counter import CommonCounter
 
 
@@ -19,6 +20,7 @@ class MattermostUploadMessages:
         self._channels_slack_ts = {}
         self._main_slack_user_id = None
         self._user_service = user_service
+        self._session_id = None
 
     def load_users(self):
         response = ''
@@ -41,12 +43,13 @@ class MattermostUploadMessages:
                 self._users_list.extend(users)
                 params["page"] += 1
 
-            self._logger_bot.info("Mattermost users loaded (%d)", len(self._users_list))
+            self._logger_bot.info(f'Mattermost users loaded ({len(self._users_list)})|Session:{self._session_id}')
 
-        except HTTPError:
+        except HTTPError as err:
             self._logger_bot.error(
-                f'Mattermost API Error (users). Status code: {response.status_code} Response:{response.text}')
-            CommonCounter.increment_error()
+                f'Mattermost API Error (users). Status code: {response.status_code} '
+                f'Response:{response.text} Error:{err} Session:{self._session_id}')
+            CommonCounter.increment_error(self._session_id)
 
     def load_users_channels(self):
         user_id = self._user_service.get_user_id_mattermost_by_user_id_slack(self._main_slack_user_id)
@@ -72,7 +75,7 @@ class MattermostUploadMessages:
                 previous_channels = channels
                 channels_list.extend(channels)
                 params["page"] += 1
-            self._logger_bot.info("Mattermost users channels loaded (%d)", len(channels_list))
+            self._logger_bot.info(f'Mattermost users channels loaded ({len(channels_list)})|Session:{self._session_id}')
             filtered_channels = []
             for channel in channels_list:
                 if channel["type"] == 'D':
@@ -84,10 +87,11 @@ class MattermostUploadMessages:
             self.set_channels_list(filtered_channels)
             for channel in filtered_channels:
                 self._set_channels_members(channel["id"])
-        except HTTPError:
+        except HTTPError as err:
             self._logger_bot.error(
-                f'Mattermost API Error (users channels). Status code: {response.status_code} Response:{response.text}')
-            CommonCounter.increment_error()
+                f'Mattermost API Error (users channels). Status code: {response.status_code} '
+                f'Response:{response.text} Error:{err} Session:{self._session_id}')
+            CommonCounter.increment_error(self._session_id)
 
     def load_channels(self):
         response = ''
@@ -109,7 +113,7 @@ class MattermostUploadMessages:
                     break
                 channels_list.extend(channels)
                 params["page"] += 1
-            self._logger_bot.info("Mattermost channels loaded (%d)", len(channels_list))
+            self._logger_bot.info(f'Mattermost channels loaded ({len(channels_list)})|Session:{self._session_id}')
             filtered_channels = []
             for channel in channels_list:
                 if self._is_selected_channel(channel["name"]):
@@ -120,12 +124,14 @@ class MattermostUploadMessages:
             self.set_channels_list(filtered_channels)
             for channel in filtered_channels:
                 self._set_channels_members(channel["id"])
-        except HTTPError:
+        except HTTPError as err:
             self._logger_bot.error(
-                f'Mattermost API Error (channels). Status code: {response.status_code} Response:{response.text}')
-            CommonCounter.increment_error()
+                f'Mattermost API Error (channels). Status code: {response.status_code} '
+                f'Response:{response.text} Error:{err} Session:{self._session_id}')
+            CommonCounter.increment_error(self._session_id)
 
     def upload_messages(self, message_data):
+        self._user_service.load_mattermost(self._session_id)
         if not self._users_list:
             self._users_list = self._user_service.get_users_mattermost_as_list()
 
@@ -134,23 +140,54 @@ class MattermostUploadMessages:
         else:
             channel_id = self._get_channel_by_name(message_data["channel"])
         if channel_id not in self._channels_slack_ts:
-            self._channels_slack_ts[channel_id] = self._get_set_slack_ts(self._mattermost_messages.load_messages(channel_id))
+            self._channels_slack_ts[channel_id] = (
+                self._get_set_slack_ts(self._mattermost_messages.load_messages(channel_id, self._session_id)))
         if message_data["ts"] in self._channels_slack_ts[channel_id]:
             self._logger_bot.info(f'Message {message_data["ts"]} has already loaded in Mattermost')
             return
         user_data = message_data["user"]
-        user_id = self._get_user_by_email(user_data)
+
+        user_id = self._user_service.get_user_id_mattermost_by_email(user_data["user_email"])
+        if not user_id:
+            slack_user_entity: UserEntity
+            slack_user_entity = self._user_service.get_user_entity_slack(user_data["user_id"])
+            self._logger_bot.info(f'slack_user_entity: {slack_user_entity}')
+            if slack_user_entity and not slack_user_entity.is_bot and slack_user_entity.email is not None:
+
+                user_dict_mm = self._user_service.create_user_mattermost(slack_user_entity, session_id=self._session_id)
+                user_list_mm = [user_dict_mm]
+                if user_list_mm:
+                    self._user_service.load_mattermost(users_list=user_list_mm, session_id=self._session_id)
+                    self._users_list = self._user_service.get_users_mattermost_as_list()
+                    user_id = self._user_service.get_user_id_mattermost_by_email(user_data["user_email"])
+
         if not self._is_user_in_channel(user_id=user_id, channel_id=channel_id) and \
+                not (message_data["channel"]["channel_type"] == "direct") and \
                 message_data["user"]["user_id"] in message_data["channel"]["channel_members"]:
             self._add_user_to_channel(user_id=user_id, channel_id=channel_id)
 
         if channel_id is None:
-            self._logger_bot.error("Channel %s did`nt find in Mattermost", message_data["channel"]["channel_name"])
-            CommonCounter.increment_error()
+            self._logger_bot.error(f'Channel {message_data["channel"]["channel_name"]} did`nt find in Mattermost|'
+                                   f'Session:{self._session_id}')
+            CommonCounter.increment_error(self._session_id)
             return
 
         for mention in message_data["users_in_mentions"]:
-            user_mention_id = self._get_user_by_email(mention)
+
+            user_mention_id = self._user_service.get_user_id_mattermost_by_email(mention["user_email"])
+            if not user_mention_id:
+                slack_user_entity: UserEntity
+                slack_user_entity = self._user_service.get_user_entity_slack(mention["user_id"])
+                self._logger_bot.info(f'slack_user_entity: {slack_user_entity}')
+                if slack_user_entity and not slack_user_entity.is_bot and slack_user_entity.email is not None:
+                    user_dict_mm = self._user_service.create_user_mattermost(user_data=slack_user_entity,
+                                                                             session_id=self._session_id)
+                    user_list_mm = [user_dict_mm]
+                    if user_list_mm:
+                        self._user_service.load_mattermost(user_list_mm, self._session_id)
+                        self._users_list = self._user_service.get_users_mattermost_as_list()
+                        user_mention_id = self._user_service.get_user_id_mattermost_by_email(mention["user_email"])
+
             if not self._is_user_in_channel(user_id=user_mention_id, channel_id=channel_id) and \
                     mention in message_data["channel"]["channel_members"]:
                 self._add_user_to_channel(user_id=user_mention_id, channel_id=channel_id)
@@ -179,8 +216,8 @@ class MattermostUploadMessages:
         response = self._mm_web_client.mattermost_session.post(f'{self._mm_web_client.mattermost_url}/posts', json=data)
         if response.status_code == 201:
             post_info = response.json()
-            self._logger_bot.info("Message loaded to Mattermost")
-            CommonCounter.increment_message()
+            self._logger_bot.info(f'Message loaded to Mattermost|Session:{self._session_id}')
+            CommonCounter.increment_message(self._session_id)
 
             if message_data["is_thread"]:
                 orig_post_id = post_info["id"]
@@ -212,18 +249,19 @@ class MattermostUploadMessages:
                     response = self._mm_web_client.mattermost_session.post(
                         f'{self._mm_web_client.mattermost_url}/posts', json=data)
                     if response.status_code == 201:
-                        self._logger_bot.info("Threads`s message loaded to Mattermost")
-                        CommonCounter.increment_message()
+                        self._logger_bot.info(f'Threads`s message loaded to Mattermost|Session:{self._session_id}')
+                        CommonCounter.increment_message(self._session_id)
                     else:
                         self._logger_bot.error(
                             f'Mattermost API Error (posts). Status code: {response.status_code} '
-                            f'Response:{response.text}')
-                        CommonCounter.increment_error()
+                            f'Response:{response.text} Session:{self._session_id}')
+                        CommonCounter.increment_error(self._session_id)
 
         else:
             self._logger_bot.error(
-                f'Mattermost API Error (posts). Status code: {response.status_code} Response:{response.text}')
-            CommonCounter.increment_error()
+                f'Mattermost API Error (posts). Status code: {response.status_code} '
+                f'Response:{response.text} Session:{self._session_id}')
+            CommonCounter.increment_error(self._session_id)
 
     def _upload_files(self, files_from_message: list, channel_id: str) -> list:
         files_list = []
@@ -231,26 +269,29 @@ class MattermostUploadMessages:
             if isinstance(file, list):
                 files_list.extend(self._upload_files(file, channel_id))
             else:
-                self._logger_bot.info("File %s is loading to Mattermost (first phase)", file["file_path"])
+                self._logger_bot.info(f'File {file["file_path"]} is loading to Mattermost (first phase)|'
+                                      f'Session:{self._session_id}')
                 files = {"files": open(file["file_path"], "rb")}
                 params = {"channel_id": channel_id}
-                self._logger_bot.info("File is loading to Mattermost (second phase) - %s and %s", files, params)
+                self._logger_bot.info(f'File is loading to Mattermost (second phase) - {files} and {params}|'
+                                      f'Session:{self._session_id}')
                 response_file = self._mm_web_client.mattermost_session.post(
                     f'{self._mm_web_client.mattermost_url}/files', params=params,
                     files=files)
 
-                self._logger_bot.info("File is loading to Mattermost (third phase) - %s", files)
+                self._logger_bot.info(f'File is loading to Mattermost (third phase) - {files}|'
+                                      f'Session:{self._session_id}')
 
                 if response_file.status_code == 201:
                     response_json = response_file.json()
-                    self._logger_bot.info("File %s loaded to Mattermost", file["file_path"])
+                    self._logger_bot.info(f'File {file["file_path"]} loaded to Mattermost|Session:{self._session_id}')
                     files_list.append(response_json['file_infos'][0]['id'])
-                    CommonCounter.increment_file()
+                    CommonCounter.increment_file(self._session_id)
                 else:
                     self._logger_bot.error(
                         f'Mattermost API Error (files). Status code: {response_file.status_code} '
-                        f'Response:{response_file.text}')
-                    CommonCounter.increment_error()
+                        f'Response:{response_file.text} Session:{self._session_id}')
+                    CommonCounter.increment_error(self._session_id)
 
         return files_list
 
@@ -284,7 +325,7 @@ class MattermostUploadMessages:
 
     def _get_channel_by_name(self, channel_data: dict) -> str:
         channel_id = None
-#        self._logger_bot.info(f'channel MM - {channel_data}')
+        #        self._logger_bot.info(f'channel MM - {channel_data}')
         for channel in self._channels_list:
             if ((channel["name"] == channel_data["channel_name"])
                     or (channel["display_name"] == channel_data["channel_name"])):
@@ -297,21 +338,22 @@ class MattermostUploadMessages:
         return channel_id
 
     def _create_channel(self, channel_data: dict) -> str:
-        self._logger_bot.info("Channel %s is creating", channel_data["channel_name"])
 
         channel_id = None
 
         if channel_data["channel_type"] == "direct":
-
             dm_users_list = []
-            for slack_user_id in  channel_data["channel_members"]:
+            for slack_user_id in channel_data["channel_members"]:
                 dm_users_list.append(self._user_service.get_user_id_mattermost_by_user_id_slack(slack_user_id))
 
-            data = [dm_users_list[0], dm_users_list[1]]
+            # for slack_user in dm_users_list:
+
+            # data = [dm_users_list[0],dm_users_list[0]]
 
             response = self._mm_web_client.mattermost_session.post(
-                f'{self._mm_web_client.mattermost_url}/channels/direct', json=data)
+                f'{self._mm_web_client.mattermost_url}/channels/direct', json=dm_users_list)
         else:
+            self._logger_bot.info("Channel %s is creating", channel_data["channel_name"])
 
             data = {
                 "team_id": self._team_id,
@@ -328,14 +370,16 @@ class MattermostUploadMessages:
         if response.status_code == 201:
             response_data = response.json()
             channel_id = response_data["id"]
-            self._channels_list.append(response_data)
-            self._logger_bot.info("Channel %s created", channel_data["channel_name"])
-            self._set_channels_members(channel_id)
-            CommonCounter.increment_channel()
+            if not self._get_channel(channel_id):
+                self._channels_list.append(response_data)
+                self._logger_bot.info(f'Channel {channel_data["channel_name"]} created|Session:{self._session_id}')
+                self._set_channels_members(channel_id)
+                CommonCounter.increment_channel(self._session_id)
         else:
             self._logger_bot.error(
-                f'Mattermost API Error (channels). Status code: {response.status_code} Response:{response.text}')
-            CommonCounter.increment_error()
+                f'Mattermost API Error (channels). Status code: {response.status_code} '
+                f'Response:{response.text} Session:{self._session_id}')
+            CommonCounter.increment_error(self._session_id)
 
         return channel_id
 
@@ -363,15 +407,16 @@ class MattermostUploadMessages:
             response_date = response.json()
             self._users_list.append(response_date)
             user_id = response_date["id"]
-            self._logger_bot.info("User %s created", self._get_user(user_id))
+            self._logger_bot.info(f'User {self._get_user(user_id)} created|Session:{self._session_id}')
 
             self._add_user_to_team(user_id=user_id, team_id=self._team_id)
-            CommonCounter.increment_user()
+            CommonCounter.increment_user(self._session_id)
 
         else:
             self._logger_bot.error(
-                f'Mattermost API Error (users). Status code: {response.status_code} Response:{response.text}')
-            CommonCounter.increment_error()
+                f'Mattermost API Error (users). Status code: {response.status_code} '
+                f'Response:{response.text} Session:{self._session_id}')
+            CommonCounter.increment_error(self._session_id)
 
         return user_id
 
@@ -380,12 +425,13 @@ class MattermostUploadMessages:
         if response.status_code == 200:
             response_data = response.json()
             self._team_id = response_data[0]["id"]
-            self._logger_bot.info("Mattermost team_id loaded - %s", self._team_id)
-            self._logger_bot.info("Teams: %s", response_data)
+            self._logger_bot.info(f'Mattermost team_id loaded - {self._team_id}|Session:{self._session_id}')
+            # self._logger_bot.info(f'Teams: {response_data}|Session:{self._session_id}')
         else:
             self._logger_bot.error(
-                f'Mattermost API Error (teams). Status code: {response.status_code} Response:{response.text}')
-            CommonCounter.increment_error()
+                f'Mattermost API Error (teams). Status code: {response.status_code} '
+                f'Response:{response.text} Session:{self._session_id}')
+            CommonCounter.increment_error(self._session_id)
 
     def _add_user_to_channel(self, user_id: str, channel_id: str):
         response = ''
@@ -393,7 +439,7 @@ class MattermostUploadMessages:
             return
 
         try:
-            self._logger_bot.info("Started adding user %s to channel %s", self._get_user(user_id)["username"],
+            self._logger_bot.info("Started adding user %s to channel %s", self._get_user(user_id)["name"],
                                   self._get_channel(channel_id)["name"])
             #            self._logger_bot.info("Users data: %s", self._get_user(user_id))
             #            self._logger_bot.info("Channels data: %s", self._get_channel(channel_id))
@@ -414,13 +460,14 @@ class MattermostUploadMessages:
                     break
                 i += 1
 
-            self._logger_bot.info("User %s added to channel %s", self._get_user(user_id)["username"],
-                                  self._get_channel(channel_id)["name"])
+            self._logger_bot.info(f'User {self._get_user(user_id)["name"]} '
+                                  f'added to channel {self._get_channel(channel_id)["name"]}|'
+                                  f'Session:{self._session_id}')
         except Exception as err:
             self._logger_bot.error(
                 f'Mattermost API Error (channels/member). Status code: {response.status_code} Response:{response.text} '
-                f'Error:{err}')
-            CommonCounter.increment_error()
+                f'Error:{err} Session:{self._session_id}')
+            CommonCounter.increment_error(self._session_id)
 
     def _set_channels_members(self, channel_id: str):
         channels = self._channels_list
@@ -445,12 +492,14 @@ class MattermostUploadMessages:
             response.raise_for_status()
             channel_members = response.json()
 
-            self._logger_bot.info("Got members of channel %s", self._get_channel(channel_id)["name"])
+            self._logger_bot.info(f'Got members of channel {self._get_channel(channel_id)["name"]}|'
+                                  f'Session:{self._session_id}')
         except Exception as err:
             self._logger_bot.error(
                 f'Mattermost API Error (channels/members). '
-                f'Status code: {response.status_code} Response:{response.text} Error:{err}')
-            CommonCounter.increment_error()
+                f'Status code: {response.status_code} Response:{response.text} '
+                f'Error:{err} Session:{self._session_id}')
+            CommonCounter.increment_error(self._session_id)
         return channel_members
 
     def _is_user_in_channel(self, user_id: str, channel_id: str) -> bool:
@@ -475,12 +524,13 @@ class MattermostUploadMessages:
                                                                    json=payload)
             response.raise_for_status()
 
-            self._logger_bot.info("User %s added to team %s", self._get_user(user_id)["username"], team_id)
+            self._logger_bot.info(f'User {self._get_user(user_id)["name"]} added to team {team_id}|'
+                                  f'Session:{self._session_id}')
         except Exception as err:
             self._logger_bot.error(
                 f'Mattermost API Error (teams/members). Status code: {response.status_code} Response:{response.text}'
-                f'Error:{err}')
-            CommonCounter.increment_error()
+                f'Error:{err} Session:{self._session_id}')
+            CommonCounter.increment_error(self._session_id)
 
     def set_channel_filter(self, channel_filter):
         if len(channel_filter) != 0 and channel_filter != 'all':
@@ -505,7 +555,7 @@ class MattermostUploadMessages:
     def get_channel_list(self) -> list:
         return self._channels_list
 
-    def _get_set_slack_ts(self, messages_data:dict) -> set:
+    def _get_set_slack_ts(self, messages_data: dict) -> set:
         slack_ts_set = set()
         for message_id, message in messages_data.items():
             if "props" in message and "slack_ts" in message["props"]:
@@ -514,3 +564,6 @@ class MattermostUploadMessages:
 
     def set_main_slack_user_id(self, slack_user_id):
         self._main_slack_user_id = slack_user_id
+
+    def set_session_id(self, session_id):
+        self._session_id = session_id

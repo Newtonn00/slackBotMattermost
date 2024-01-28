@@ -28,7 +28,6 @@ class Containers(containers.DeclarativeContainer):
 
     mattermost_messages = providers.Singleton(MattermostMessages, mattermost_web_client)
 
-
     config_repo = providers.Factory(ConfigRepository)
     config_service = providers.Factory(ConfigService, config_repo=config_repo)
     slack_load_pins = providers.Factory(SlackLoadPins)
@@ -44,39 +43,27 @@ class Containers(containers.DeclarativeContainer):
                                        slack_users_handler=slack_users_handler,
                                        mattermost_users_handler=mattermost_users_handler)
 
-    mattermost_upload_messages = providers.Singleton(MattermostUploadMessages,
-                                                     mattermost_web_client=mattermost_web_client,
-                                                     mattermost_messages=mattermost_messages,
-                                                     user_service=user_service)
+    mattermost_upload_messages = providers.Factory(MattermostUploadMessages,
+                                                   mattermost_web_client=mattermost_web_client,
+                                                   mattermost_messages=mattermost_messages,
+                                                   user_service=user_service)
 
-    pin_service = providers.Singleton(PinService, slack_load_pins, mattermost_pins, mattermost_upload_messages,
-                                      mattermost_messages)
-    bookmark_service = providers.Singleton(BookmarkService, slack_load_bookmarks, mattermost_bookmarks,
-                                           mattermost_upload_messages)
+    pin_service = providers.Factory(PinService, slack_load_pins, mattermost_pins, mattermost_messages)
+    bookmark_service = providers.Factory(BookmarkService, slack_load_bookmarks, mattermost_bookmarks)
 
-    messages_service = providers.Singleton(MessagesService,
-                                           config_service=config_service,
-                                           mattermost_upload_messages=mattermost_upload_messages)
-    thread_service = providers.Singleton(ThreadService,
-                                         config_service=config_service,
-                                         messages_service=messages_service,
-                                         mattermost_upload_messages=mattermost_upload_messages,
-                                         mattermost_messages=mattermost_messages,
-                                         slack_messages_handler=slack_messages_handler)
+    messages_service = providers.Factory(MessagesService, config_service=config_service)
+    thread_service = providers.Factory(ThreadService,
+                                       config_service=config_service,
+                                       messages_service=messages_service,
+                                       mattermost_messages=mattermost_messages,
+                                       slack_messages_handler=slack_messages_handler,
+                                       user_service=user_service)
 
     slack_load_messages = providers.Factory(SlackLoadMessages,
                                             web_client=slack_web_client,
                                             config_service=config_service,
-                                            messages_service=messages_service,
-                                            pin_service=pin_service,
-                                            bookmark_service=bookmark_service,
-                                            thread_service=thread_service,
-                                            slack_messages_handler=slack_messages_handler)
+                                            slack_messages_handler=slack_messages_handler,
+                                            user_service=user_service)
     slack_app_manager = providers.Factory(SlackAppManager,
                                           config_service=config_service,
-                                          slack_load_messages=slack_load_messages,
-                                          mattermost_upload_messages=mattermost_upload_messages,
-                                          pin_service=pin_service,
-                                          bookmark_service=bookmark_service,
-                                          thread_service=thread_service,
                                           user_service=user_service)

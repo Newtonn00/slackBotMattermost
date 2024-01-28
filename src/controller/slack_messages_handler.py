@@ -1,6 +1,5 @@
 import logging
 import os
-import time
 
 import requests
 from slack_sdk.errors import SlackApiError
@@ -20,11 +19,12 @@ class SlackMessagesHandler:
     def __init__(self, web_client):
 
         self._logger_bot = logging.getLogger("")
-        self._web_client = web_client.slack_web_client
-        self._slack_bot_token = web_client.slack_bot_token
+        self._web_client = web_client.get_web_instance()
+        self._bot_web_client = web_client.get_web_instance()
+        self._slack_bot_token = ""
         self._messages_per_page = 100
 
-    def load_threads(self, channel_id: str, ts_of_parent_message, oldest_date=0) -> list:
+    def load_threads(self, channel_id: str, ts_of_parent_message, session_id: str, oldest_date=0) -> list:
         try:
             response = self._web_client.conversations_replies(
                 channel=channel_id,
@@ -33,20 +33,22 @@ class SlackMessagesHandler:
             )
 
             reply_messages = response["messages"][1:]
-            self._logger_bot.info("Thread (ts %s) - %d messages loaded", ts_of_parent_message, len(reply_messages))
+            self._logger_bot.info(f"Thread (ts {ts_of_parent_message}) - {len(reply_messages)} messages loaded | "
+                                  f"Session: {session_id}")
         except SlackApiError as e:
-            self._logger_bot.error(f"SlackAPIError (conversations_replies): {e.response['error']}")
-            CommonCounter.increment_error()
+            self._logger_bot.error(f"SlackAPIError (conversations_replies): {e.response['error']} "
+                                   f"Session: {session_id}")
+            CommonCounter.increment_error(session_id)
             return []
 
         return reply_messages
 
-    def download_files(self, files_attach: list) -> list:
+    def download_files(self, files_attach: list, session_id: str) -> list:
         files_list = []
         for files in files_attach:
             if "url_private_download" not in files:
                 break
-            self._logger_bot.info(f'{files["name"]} is downloading')
+            self._logger_bot.info(f'{files["name"]} is downloading | Session: {session_id}')
             response_file = requests.get(files["url_private_download"],
                                          headers={
                                              'Authorization': 'Bearer %s' % self._slack_bot_token})
@@ -59,10 +61,10 @@ class SlackMessagesHandler:
                         for chunk in response_file.iter_content(chunk_size=8192):
                             local_file.write(chunk)
                     self._logger_bot.info(
-                        f'File {files["name"]} is downloaded to {local_file_path}')
+                        f'File {files["name"]} is downloaded to {local_file_path} | Session: {session_id}')
                 except Exception:
-                    self._logger_bot.error("Error in downloading as local file")
-                    CommonCounter.increment_error()
+                    self._logger_bot.error(f"Error in downloading as local file | Session: {session_id}")
+                    CommonCounter.increment_error(session_id)
 
                 files_dict = {
                     "file_name": files["name"],
@@ -70,23 +72,23 @@ class SlackMessagesHandler:
                     "user_id": files["user"],
                     "file_path": local_file_path}
                 files_list.append(files_dict)
-                self._logger_bot.info(f'{files["name"]} is downloaded from Slack')
+                self._logger_bot.info(f'{files["name"]} is downloaded from Slack | Session: {session_id}')
             else:
-                self._logger_bot.error(f'SlackAPIError (files): {response_file.json()}')
-                CommonCounter.increment_error()
+                self._logger_bot.error(f'SlackAPIError (files): {response_file.json()} | Session: {session_id}')
+                CommonCounter.increment_error(session_id)
         return files_list
 
-    def send_message(self, user_id, message_text):
+    def send_message(self, user_id, message_text, session_id: str):
         try:
-            self._logger_bot.info(f'Sending message to user {user_id}')
-            response = self._web_client.conversations_open(users=user_id, return_im=True)
+            self._logger_bot.info(f'Sending message to user {user_id} | Session: {session_id}')
+            response = self._bot_web_client.conversations_open(users=user_id, return_im=True)
             response_data = response
             if "channel" in response:
-                response = self._web_client.chat_postMessage(channel=response["channel"]["id"], text=message_text)
+                response = self._bot_web_client.chat_postMessage(channel=response["channel"]["id"], text=message_text)
         except SlackApiError as e:
-            self._logger_bot.error(f"SlackAPIError (conversations.opens): {e.response['error']}")
-            CommonCounter.increment_error()
-
+            self._logger_bot.error(f"SlackAPIError (conversations.opens): {e.response['error']}"
+                                   f" Session: {session_id}")
+            CommonCounter.increment_error(session_id)
 
     def _shorten_filename(self, file_path, max_length=max_files_length) -> str:
         # Получаем имя файла из полного пути
@@ -104,3 +106,8 @@ class SlackMessagesHandler:
 
         return shortened_name
 
+    def set_webclient(self, slack_webclient):
+        self._web_client = slack_webclient
+
+    def set_slack_token(self, slack_token):
+        self._slack_bot_token = slack_token

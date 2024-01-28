@@ -11,7 +11,7 @@ class MattermostMessages:
         self._mm_web_client = mattermost_web_client
         self._messages_per_page = 100
 
-    def load_messages(self, channel_id: str) -> dict:
+    def load_messages(self, channel_id: str, session_id: str) -> dict:
         messages_dict = {}
         response = ''
         params = {
@@ -34,13 +34,12 @@ class MattermostMessages:
                 messages_dict.update(messages)
                 params["page"] += 1
 
-
             if messages:
-                self._logger_bot.info("Mattermost messages loaded (%d)", len(messages_dict))
+                self._logger_bot.info(f'Mattermost messages loaded ({len(messages_dict)})|Session:{session_id}')
 
         except HTTPError as err:
             self._logger_bot.error(
                 f'Mattermost API Error (channels/posts). Status code: {response.status_code} '
-                f'Response:{response.text} Error:{err}')
-            CommonCounter.increment_error()
+                f'Response:{response.text} Error:{err} Session:{session_id}')
+            CommonCounter.increment_error(session_id)
         return messages_dict

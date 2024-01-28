@@ -21,6 +21,5 @@ class FileInstance:
     def save_file(self, config_entity: ConfigEntity):
 
         config_dict = asdict(config_entity)
-        with open(self._config_file,'w') as f:
-            f.write(json.dumps(config_dict,default=str))
-
+        with open(self._config_file, 'w') as f:
+            f.write(json.dumps(config_dict, default=str))

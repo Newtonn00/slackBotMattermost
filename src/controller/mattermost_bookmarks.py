@@ -14,7 +14,7 @@ class MattermostBookmarks:
         self._mm_web_client = mattermost_web_client
         self._messages_per_page = 100
 
-    def update_channel_header(self, bookmark: str, channel_id: str):
+    def update_channel_header(self, bookmark: str, channel_id: str, session_id: str):
         response = ''
         json_data = {
 
@@ -27,10 +27,12 @@ class MattermostBookmarks:
                 f'{self._mm_web_client.mattermost_url}/channels/{channel_id}',json=json_data)
             response.raise_for_status()
             data = response.json()
-            self._logger_bot.info("Mattermost channels %s header updated", channel_id)
+            self._logger_bot.info(f'Mattermost channels {channel_id} header updated|Session: {session_id}')
 
         except HTTPError as err:
             self._logger_bot.error(
-                f'Mattermost API Error (channels header). Status code: {response.status_code} Response:{response.text} '
-                f'Error: {err}')
-            CommonCounter.increment_error()
+                f'Mattermost API Error (channels header). Status code: {response.status_code} '
+                f'Response:{response.text} '
+                f'Error: {err} '
+                f'Session: {session_id}')
+            CommonCounter.increment_error(session_id)

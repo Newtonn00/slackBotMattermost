@@ -16,9 +16,13 @@ class SlackLoadMessages:
     CREATED = 201
     OK = 200
     FILE_SIZE_LIMIT = 100000000
+    container  = None
 
-    def __init__(self, web_client, config_service, messages_service, pin_service, bookmark_service, thread_service,
-                 slack_messages_handler):
+    @classmethod
+    def set_container_instance(cls, container_instance):
+        cls.container = container_instance
+
+    def __init__(self, web_client, config_service, slack_messages_handler, user_service):
         settings = SettingsParser()
 
         self._logger_bot = logging.getLogger("")
@@ -27,34 +31,40 @@ class SlackLoadMessages:
         self._web_client = WebClient(settings.slack_bot_token)
         self._slack_token = settings.slack_bot_token
         self._config_service = config_service
-        self._messages_service = messages_service
-        self._pin_service = pin_service
-        self._bookmark_service = bookmark_service
-        self._thread_service = thread_service
+        self._messages_service = None
+        self._mm_upload_msg = None
         self._slack_messages_handler = slack_messages_handler
         self._initial_user_id = ""
         self._messages_per_page = 10
         self._channel_filter = []
         self._user_mails_list = []
+        self._user_service = user_service
+        self._session_id = None
 
     def load_channel_messages(self, channel_type=None):
+        self._slack_messages_handler.set_webclient(self._web_client)
+        self._slack_messages_handler.set_slack_token(self._slack_token)
+        if not self._messages_service:
+            self._messages_service = self.container.messages_service()
+
+        if not self._messages_service.get_mm_upload_messages_instance():
+            self._messages_service.set_mm_upload_messages_instance(self._mm_upload_msg)
 
         if channel_type is None:
             channel_type = ["direct", "public", "private"]
+        self._user_service.load_slack(self._session_id)
+        self.set_users_list(self._user_service.get_users_slack_as_dict())
+        #        self.load_users()
 
-        self.load_users()
         if "direct" in channel_type:
             self.load_direct_channels()
         else:
             self.load_channels()
             self._set_channel_type_filter(channel_type)
-        self._logger_bot.info(self._channels_list)
+        # self._logger_bot.info(self._channels_list)
 
         self._messages_service.set_users_list(self._users_list)
         self._messages_service.set_channels_list(self._channels_list)
-        self._pin_service.set_slack_channels_list(self._channels_list)
-        self._bookmark_service.set_slack_channels_list(self._channels_list)
-        self._thread_service.set_slack_channels_list(self._channels_list)
 
         self._logger_bot.info(f'Loading messages from {channel_type} channels')
         for channel_id, channel_item in self._channels_list.items():
@@ -72,11 +82,11 @@ class SlackLoadMessages:
                     try:
                         max_retries = 3
                         retry_count = 0
-
+                        self._logger_bot.info(
+                            f"Starting request to Slack (conversations_history) "
+                            f"| Session: {self._session_id}")
                         while retry_count < max_retries:
-                            self._logger_bot.info(
-                                "Starting request to Slack (conversations_history). %d times repeated",
-                                retry_count)
+
                             response = self._web_client.conversations_history(
                                 channel=channel_item["id"],
                                 limit=self._messages_per_page,
@@ -102,12 +112,13 @@ class SlackLoadMessages:
                             break
                     except SlackApiError as e:
                         self._logger_bot.error(
-                            f"SlackAPIError (conversations_history): {e.response['error']}")
-                        CommonCounter.increment_error()
+                            f"SlackAPIError (conversations_history): {e.response['error']} "
+                            f"Session: {self._session_id}")
+                        CommonCounter.increment_error(self._session_id)
                         break
 
-                self._logger_bot.info("Selected %d messages from Slack channel %s", len(messages),
-                                      channel_item["name"])
+                self._logger_bot.info(f'Selected {len(messages)} messages from Slack channel {channel_item["name"]} | '
+                                      f'Session: {self._session_id}')
 
                 messages_count = len(messages)
                 replies_count = 0
@@ -156,10 +167,11 @@ class SlackLoadMessages:
                                                                         channel_name=channel_item["name"])
 
                 text_msg = (f'channel {channel_item["name"]} transfer statistics:\n'
-                            f'{CommonCounter.get_str_custom_statistic()}')
-                CommonCounter.init_custom_counter()
+                            f'{CommonCounter.get_str_custom_statistic(self._session_id)}')
+                CommonCounter.init_custom_counter(self._session_id)
                 self._logger_bot.info(text_msg)
-                self._slack_messages_handler.send_message(self._initial_user_id, text_msg)
+
+                self._slack_messages_handler.send_message(self._initial_user_id, text_msg, self._session_id)
 
     def load_threads(self, channel_id, ts_of_parent_message, oldest_date) -> list:
         try:
@@ -170,10 +182,12 @@ class SlackLoadMessages:
             )
 
             reply_messages = response["messages"][1:]
-            self._logger_bot.info("Thread (%d messages) loaded", len(reply_messages))
+            self._logger_bot.info(f"Thread ({len(reply_messages)} messages) loaded | "
+                                  f"Session: {self._session_id}")
         except SlackApiError as e:
-            self._logger_bot.error(f"SlackAPIError (conversations_replies): {e.response['error']}")
-            CommonCounter.increment_error()
+            self._logger_bot.error(f"SlackAPIError (conversations_replies): {e.response['error']} "
+                                   f"Session: {self._session_id}")
+            CommonCounter.increment_error(self._session_id)
             return []
         thread_messages = []
         for reply in reply_messages:
@@ -190,9 +204,9 @@ class SlackLoadMessages:
             max_retries = 3
             retry_count = 0
             user_list = []
+            self._logger_bot.info(f"Starting request to Slack (users) | "
+                                  f"Session: {self._session_id}")
             while retry_count < max_retries:
-                self._logger_bot.info("Starting request to Slack (users). %d times repeated",
-                                      retry_count)
 
                 response = self._web_client.users_list()
 
@@ -209,8 +223,9 @@ class SlackLoadMessages:
                                     response={"error": f' Timeout error, {self.REQUEST_TIME_OUT}'})
 
         except SlackApiError as e:
-            self._logger_bot.error(f"SlackAPIError (users_list): {e.response['error']}")
-            CommonCounter.increment_error()
+            self._logger_bot.error(f"SlackAPIError (users_list): {e.response['error']}"
+                                   f"Session: {self._session_id}")
+            CommonCounter.increment_error(self._session_id)
             return
         users = {}
         for user in user_list:
@@ -232,7 +247,7 @@ class SlackLoadMessages:
                                  "is_deleted": user_is_deleted, "first_name": user_first_name,
                                  "last_name": user_last_name, "display_name": user_display_name}
 
-        self._logger_bot.info("Slack users loaded (%d)", len(users))
+        self._logger_bot.info(f"Slack users loaded ({len(users)}) | Session: {self._session_id}")
         self.set_users_list(users)
 
     def load_channels(self):
@@ -242,7 +257,7 @@ class SlackLoadMessages:
             max_retries = 3
             retry_count = 0
             channels_list = []
-            self._logger_bot.info("Starting request to Slack (channels)")
+            self._logger_bot.info(f"Starting request to Slack (channels) | Session: {self._session_id}")
             while retry_count < max_retries:
                 response = self._web_client.conversations_list(types="public_channel,private_channel",
                                                                limit=self._messages_per_page)
@@ -281,11 +296,12 @@ class SlackLoadMessages:
                     if retry_count == max_retries:
                         raise SlackApiError(message=f'Timeout after {retry_count} retries',
                                             response={"error": f' Timeout error, {self.REQUEST_TIME_OUT}'})
-            self._logger_bot.info("Slack channels loaded - %d", len(channels_list))
+            self._logger_bot.info(f"Slack channels loaded - {len(channels_list)} | Session: {self._session_id}")
         except SlackApiError as e:
             self._logger_bot.error(f"SlackAPIError (conversations_list types=public_channel,private_channel): "
-                                   f"{e.response['error']}")
-            CommonCounter.increment_error()
+                                   f"{e.response['error']}"
+                                   f"Session: {self._session_id}")
+            CommonCounter.increment_error(self._session_id)
             return
 
         channels = {}
@@ -311,13 +327,16 @@ class SlackLoadMessages:
         try:
             max_retries = 3
             retry_count = 0
+            next_cursor = ""
             channels_users_list = []
-            self._logger_bot.info("Starting request to Slack (dm-channels)")
+            self._logger_bot.info(f"Starting request to Slack (dm-channels) | "
+                                  f"Session: {self._session_id}")
             while retry_count < max_retries:
 
                 response = self._web_client.conversations_list(limit=self._messages_per_page, types="im,mpim")
                 response_code = response.status_code
                 if response_code == self.OK:
+                    # self._logger_bot.info(f'Channels: {response["channels"]}')
                     channels_users_list = response["channels"]
                     next_cursor = response["response_metadata"]["next_cursor"]
                     break
@@ -332,14 +351,12 @@ class SlackLoadMessages:
             while next_cursor:
                 max_retries = 3
                 retry_count = 0
-                channels_users_list = []
                 while retry_count < max_retries:
-                    response_code = response.status_code
-                    if response_code == self.OK:
-
-                        response = self._web_client.conversations_list(types="im,mpim",
-                                                                       limit=self._messages_per_page,
-                                                                       cursor=next_cursor)
+                    response = self._web_client.conversations_list(types="im,mpim",
+                                                                   limit=self._messages_per_page,
+                                                                   cursor=next_cursor)
+                    if response.status_code == self.OK:
+                        # self._logger_bot.info(f'Channels: {response["channels"]}')
                         channels_users_list.extend(response["channels"])
                         next_cursor = response["response_metadata"]["next_cursor"]
                         break
@@ -351,12 +368,14 @@ class SlackLoadMessages:
                     raise SlackApiError(message=f'Timeout after {retry_count} retries',
                                         response={"error": f' Timeout error, {self.REQUEST_TIME_OUT}'})
 
-            self._logger_bot.info("Slack direct messages channels loaded - %d", len(channels_users_list))
+            self._logger_bot.info(f"Slack direct messages channels loaded - {len(channels_users_list)} |"
+                                  f" Session: {self._session_id}")
         except SlackApiError as e:
-            self._logger_bot.error(f"SlackAPIError (conversations_list types=im,mpim): {e.response['error']}")
-            CommonCounter.increment_error()
+            self._logger_bot.error(f"SlackAPIError (conversations_list types=im,mpim): {e.response['error']}"
+                                   f" Session: {self._session_id}")
+            CommonCounter.increment_error(self._session_id)
             return
-        self._logger_bot.info(f'Channels: {channels_users_list}')
+        # self._logger_bot.info(f'Channels: {channels_users_list}')
         channels = {}
         for channel in channels_users_list:
             if "name" in channel:
@@ -376,17 +395,23 @@ class SlackLoadMessages:
                 members = self._load_channel_members(channel)
 
                 exclude_channel = True
-                for user in members:
+                if len(members) == 1 and members[0] == self._initial_user_id:
+                    exclude_channel = False
+                    members.append(self._initial_user_id)
+                else:
+                    for user in members:
 
-                    self._logger_bot.info(self._users_list.get(user))
-                    if not(user == self._initial_user_id) and self._user_mails_list and not self._users_list.get(user)["email"] in self._user_mails_list:
-                        continue
+                        # self._logger_bot.info(self._users_list.get(user))
+                        if (not (user == self._initial_user_id) and self._user_mails_list and
+                                not self._users_list.get(user)["email"] in self._user_mails_list):
+                            continue
 
-                    if user not in self._users_list or self._users_list.get(user)["is_bot"] or user == self._initial_user_id:
-                        continue
-                    else:
-                        exclude_channel = False
-
+                        if (user not in self._users_list
+                                or self._users_list.get(user)["is_bot"]
+                                or user == self._initial_user_id):
+                            continue
+                        else:
+                            exclude_channel = False
 
                 if exclude_channel:
                     del self._channels_list[channel]
@@ -397,13 +422,11 @@ class SlackLoadMessages:
     def _load_channel_members(self, channel_id: str) -> list:
 
         try:
-
+            self._logger_bot.info(f'Starting request to Slack (channels/members) | Session {self._session_id}')
             max_retries = 3
             retry_count = 0
             members_list = []
             while retry_count < max_retries:
-                self._logger_bot.info("Starting request to Slack (channels/members). %d times repeated",
-                                      retry_count)
 
                 response = self._web_client.conversations_members(channel=channel_id,
                                                                   limit=self._messages_per_page)
@@ -411,8 +434,6 @@ class SlackLoadMessages:
                 if response_code == self.OK:
 
                     members_list = response["members"]
-                    self._logger_bot.info("Loaded %s members for channel %s", len(response["members"]),
-                                          self._get_channel(channel_id)["name"])
                     break
                 else:
                     retry_count += 1
@@ -428,17 +449,12 @@ class SlackLoadMessages:
                 max_retries = 3
                 retry_count = 0
                 while retry_count < max_retries:
-                    self._logger_bot.info("Starting request to Slack (channels|members). "
-                                          "%d times repeated",
-                                          retry_count)
                     response = self._web_client.conversations_members(channel=channel_id,
                                                                       limit=self._messages_per_page, cursor=next_cursor)
                     response_code = response.status_code
                     if response_code == self.OK:
 
                         members_list.extend(response["members"])
-                        self._logger_bot.info("Loaded %s members for channel %s", len(response["members"]),
-                                              self._get_channel(channel_id)["name"])
                         next_cursor = response["response_metadata"]["next_cursor"]
                         break
                     else:
@@ -451,9 +467,13 @@ class SlackLoadMessages:
 
         except SlackApiError as e:
             self._logger_bot.error(f"SlackAPIError (conversations_members): "
-                                   f"{e.response['error']}")
-            CommonCounter.increment_error()
+                                   f"{e.response['error']}"
+                                   f" Session: {self._session_id}")
+            CommonCounter.increment_error(self._session_id)
             return []
+
+        self._logger_bot.info(f'Loaded {len(members_list)} members for channel {self._get_channel(channel_id)["name"]} | '
+                              f'Session: {self._session_id}')
         return members_list
 
     def _set_channels_members(self, channel_id: str, members: list):
@@ -486,7 +506,9 @@ class SlackLoadMessages:
                 continue
 
             if files["size"] > self.FILE_SIZE_LIMIT:
-                self._logger_bot.info(f'File {files["name"]} size {files["size"]} is more than {self.FILE_SIZE_LIMIT}')
+                self._logger_bot.info(f'File {files["name"]} size {files["size"]} '
+                                      f'is more than {self.FILE_SIZE_LIMIT}'
+                                      f' | Session: {self._session_id}')
                 continue
 
             self._logger_bot.info(f'{files["name"]} is downloading')
@@ -504,10 +526,12 @@ class SlackLoadMessages:
                         for chunk in response_file.iter_content(chunk_size=8192):
                             local_file.write(chunk)
                     self._logger_bot.info(
-                        f'File {files["name"]} is downloaded to {local_file_path}')
+                        f'File {files["name"]} is downloaded to {local_file_path} | '
+                        f'Session: {self._session_id}')
                 except Exception:
-                    self._logger_bot.error("Error in downloading as local file")
-                    CommonCounter.increment_error()
+                    self._logger_bot.error(f'Error in downloading as local file | '
+                                           f'Session: {self._session_id}')
+                    CommonCounter.increment_error(self._session_id)
 
                 files_dict = {
                     "file_name": files["name"],
@@ -515,10 +539,12 @@ class SlackLoadMessages:
                     "user_id": files["user"],
                     "file_path": local_file_path}
                 files_list.append(files_dict)
-                self._logger_bot.info(f'{files["name"]} is downloaded from Slack')
+                self._logger_bot.info(f'{files["name"]} is downloaded from Slack'
+                                      f' | Session: {self._session_id}')
             else:
-                self._logger_bot.error(f'SlackAPIError (files): {response_file.json()}')
-                CommonCounter.increment_error()
+                self._logger_bot.error(f'SlackAPIError (files): {response_file.json()} '
+                                       f'| Session: {self._session_id}')
+                CommonCounter.increment_error(self._session_id)
         return files_list
 
     def set_channels_list(self, channels: dict):
@@ -573,3 +599,9 @@ class SlackLoadMessages:
     def set_direct_channels_filter(self, user_mails: str):
         if user_mails != "all":
             self._user_mails_list = user_mails.split(" ")
+
+    def set_mm_upload_msg_instance(self, mm_upload_msg):
+        self._mm_upload_msg = mm_upload_msg
+
+    def set_session_id(self, session_id):
+        self._session_id = session_id

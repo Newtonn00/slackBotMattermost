@@ -7,17 +7,19 @@ class ThreadService:
     _slack_load_pins = None
     _slack_users_list: list
 
-    def __init__(self, config_service, messages_service, mattermost_upload_messages, mattermost_messages,
-                 slack_messages_handler):
-        self._mattermost_upload_messages = mattermost_upload_messages
+    def __init__(self, config_service, messages_service, mattermost_messages,
+                 slack_messages_handler, user_service):
         self._mattermost_messages = mattermost_messages
         self._slack_messages_handler = slack_messages_handler
         self._last_sync_date = config_service.get_all_last_synchronize_date_unix()
         self._message_service = messages_service
         self._channel_filter = []
+        self._user_service = user_service
+        self._session_id = None
 
     def process(self):
-        self.set_mm_channels_list(self._mattermost_upload_messages.get_channel_list())
+        self._user_service.load_slack(self._session_id)
+        self.set_slack_users_list(self._user_service.get_users_slack_as_list())
         self._apply_filter_to_mm_channel()
         self._apply_filter_to_slack_channel()
         self._message_service.set_users_list(self._slack_users_list)
@@ -25,7 +27,7 @@ class ThreadService:
         for channel_key, channel_item in self._slack_channels_list.items():
             mm_channel_id = self._get_mm_channel_id_by_name(channel_item["name"])["id"]
             date_for_selection_messages = int((datetime.now() - timedelta(days=90)).timestamp())
-            mm_messages_dict = self._mattermost_messages.load_messages(mm_channel_id)
+            mm_messages_dict = self._mattermost_messages.load_messages(mm_channel_id, self._session_id)
             slack_ts_set = self._get_set_slack_ts(mm_messages_dict)
             slack_thread_timestamps = {}
             last_date_sync_unix = datetime.strptime(self._last_sync_date.get(channel_item["name"],
@@ -46,7 +48,8 @@ class ThreadService:
 
                         slack_ts_set.add(message["ts"])
                         if "files" in message:
-                            files_list = self._slack_messages_handler.download_files(message["files"])
+                            files_list = self._slack_messages_handler.download_files(message["files"],
+                                                                                     session_id=self._session_id)
                             message["files"] = files_list
 
                         message["post_id"] = mm_post_id
@@ -62,7 +65,8 @@ class ThreadService:
         self._message_service.save_reply_to_mattermost(message)
 
     def _slack_load_thread_replies(self, channel_id: str, ts: str, last_date_sync_unix = 0) -> list:
-        reply_messages = self._slack_messages_handler.load_threads(channel_id, ts, last_date_sync_unix)
+        reply_messages = self._slack_messages_handler.load_threads(channel_id, ts, last_date_sync_unix,
+                                                                   session_id=self._session_id)
         return reply_messages
 
     def _get_slack_thread_timestamps(self, messages_dict: dict, last_date_sync_unix: int) -> dict:
@@ -127,4 +131,7 @@ class ThreadService:
             if "props" in message and "slack_ts" in message["props"]:
                 slack_ts_set.add(message["props"]["slack_ts"])
         return slack_ts_set
+
+    def set_session_id(self, session_id):
+        self._session_id = session_id
 

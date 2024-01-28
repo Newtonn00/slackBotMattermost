@@ -10,3 +10,6 @@ class SlackWebClient:
         self.slack_bot_token = settings.slack_bot_token
         self.slack_web_client = WebClient(self.slack_bot_token)
 
+    def get_web_instance(self) -> WebClient:
+        return self.slack_web_client
+
