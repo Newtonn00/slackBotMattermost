@@ -18,17 +18,21 @@ class BookmarkService:
         self._session_id = None
 
     def bookmarks_process(self):
-        self._apply_filter_to_mm_channel()
+#        self._apply_filter_to_mm_channel()
         self._apply_filter_to_slack_channel()
         for channel_key, channel_item in self._slack_channels_list.items():
             slack_bookmark_list = self._get_slack_bookmarks(channel_key)
 
-            mm_channel_item = self._get_mm_channel_id_by_name(channel_item["name"])
+            if channel_item["type"] in ["public", "private"]:
+                mm_channel_item = self._get_mm_channel_id_by_name(channel_item["name"])
+            else:
+                mm_channel_item = self._get_mm_channel_id_by_slack_id(channel_key)
+
             if mm_channel_item:
                 mm_channel_id = mm_channel_item.get("id")
             else:
                 self._logger_bot.info(f'Channel {channel_item["name"]} not found in Mattermost')
-                CommonCounter.increment_error()
+                CommonCounter.increment_error(self._session_id)
                 break
 
             for bookmark in slack_bookmark_list:
@@ -63,6 +67,15 @@ class BookmarkService:
                 break
         return mm_channel
 
+    def _get_mm_channel_id_by_slack_id(self, slack_channel_id: str) -> dict:
+        mm_channel: dict = {}
+        for channel in self._mm_channels_list:
+            if channel["slack_channel_id"] == slack_channel_id:
+                mm_channel = channel
+                break
+        return mm_channel
+
+
     def _get_slack_channel(self, channel_id: str) -> dict:
         slack_channel: dict = {}
         for channel_key, channel_item in self._slack_channels_list.items():
@@ -71,17 +84,20 @@ class BookmarkService:
                 break
         return slack_channel
 
-    def set_channel_filter(self, channel_filter: str):
-        if len(channel_filter) != 0 and channel_filter != "all":
-            self._channel_filter = channel_filter.split(" ")
+    def set_channel_filter(self, channel_ids: str):
+        if channel_ids.strip() == "all":
+            self._channel_filter = []
+        else:
+            self._channel_filter = channel_ids.strip().split(" ")
 
     def _apply_filter_to_slack_channel(self):
         channels = self._slack_channels_list
         filtered_channels = {}
-        for channel_id, channel_item in channels.items():
-            if channel_item["name"] in self._channel_filter:
-                filtered_channels[channel_id] = channel_item
-        self._slack_channels_list = filtered_channels
+        if self._channel_filter:
+            for channel_id, channel_item in channels.items():
+                if channel_id in self._channel_filter:
+                    filtered_channels[channel_id] = channel_item
+            self._slack_channels_list = filtered_channels
 
     def _apply_filter_to_mm_channel(self):
         channels = self._mm_channels_list

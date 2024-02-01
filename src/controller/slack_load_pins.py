@@ -5,8 +5,8 @@ from typing import List
 from slack_sdk.errors import SlackApiError
 from slack_sdk import WebClient
 
+from src.controller.token_storage import TokenStorage
 from src.util.common_counter import CommonCounter
-from src.util.settings_parser import SettingsParser
 from src.entity.pin_entity import PinEntity
 
 
@@ -17,10 +17,8 @@ class SlackLoadPins:
     OK = 200
 
     def __init__(self):
-        settings = SettingsParser()
         self._logger_bot = logging.getLogger("")
-        self._web_client = WebClient(settings.slack_bot_token)
-        self._slack_token = settings.slack_bot_token
+        self._web_client = None
         self._messages_per_page = 100
 
     def _map_dict_to_pin_entity(self, data: dict) -> PinEntity:
@@ -34,6 +32,8 @@ class SlackLoadPins:
 
     def load_pins(self, channel_id: str, session_id: str) -> List[PinEntity]:
         pinned_messages = []
+        if not self._web_client:
+            self._web_client = WebClient(TokenStorage.get_slack_token(session_id))
         try:
             max_retries = 3
             retry_count = 0
@@ -58,12 +58,13 @@ class SlackLoadPins:
                                     response={"error": f' Timeout error, {self.REQUEST_TIME_OUT}'})
         except SlackApiError as e:
             self._logger_bot.error(
-                f"SlackAPIError (conversations_history): {e.response['error']} "
+                f"SlackAPIError (pin_list): {e.response['error']} "
                 f"Session: {session_id}")
             CommonCounter.increment_error(session_id)
 
-        self._logger_bot.info(f"Selected {len(pinned_messages)} pinned messages from Slack channel_id channel_id | "
-                              f"Session: {session_id}")
+        self._logger_bot.info(f'Selected {len(pinned_messages["items"])} pinned messages from Slack channel_id '
+                              f'channel_id |'
+                              f'Session: {session_id}')
 
         pin_entity: List[PinEntity] = []
         if "items" in pinned_messages:

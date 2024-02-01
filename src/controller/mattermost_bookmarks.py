@@ -24,7 +24,7 @@ class MattermostBookmarks:
         try:
 
             response = self._mm_web_client.mattermost_session.put(
-                f'{self._mm_web_client.mattermost_url}/channels/{channel_id}',json=json_data)
+                f'{self._mm_web_client.mattermost_url}/channels/{channel_id}/patch',json=json_data)
             response.raise_for_status()
             data = response.json()
             self._logger_bot.info(f'Mattermost channels {channel_id} header updated|Session: {session_id}')

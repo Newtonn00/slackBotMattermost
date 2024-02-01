@@ -35,9 +35,8 @@ class SlackLoadMessages:
         self._mm_upload_msg = None
         self._slack_messages_handler = slack_messages_handler
         self._initial_user_id = ""
-        self._messages_per_page = 10
-        self._channel_filter = []
-        self._user_mails_list = []
+        self._messages_per_page = 100
+        self._channel_id_filter_list = []
         self._user_service = user_service
         self._session_id = None
 
@@ -51,13 +50,13 @@ class SlackLoadMessages:
             self._messages_service.set_mm_upload_messages_instance(self._mm_upload_msg)
 
         if channel_type is None:
-            channel_type = ["direct", "public", "private"]
+            channel_type = ["direct", "group","public", "private"]
         self._user_service.load_slack(self._session_id)
         self.set_users_list(self._user_service.get_users_slack_as_dict())
         #        self.load_users()
 
-        if "direct" in channel_type:
-            self.load_direct_channels()
+        if ("direct" in channel_type) or ("group" in channel_type):
+            self.load_direct_channels(channel_type)
         else:
             self.load_channels()
             self._set_channel_type_filter(channel_type)
@@ -69,9 +68,12 @@ class SlackLoadMessages:
         self._logger_bot.info(f'Loading messages from {channel_type} channels')
         for channel_id, channel_item in self._channels_list.items():
 
-            if (self._is_selected_channel(channel_item["name"]) and self._config_service.is_allowed_channel(
-                    channel_item["name"]) and channel_item["type"] in channel_type) or (channel_type == "direct"):
-                oldest_date = self._config_service.get_last_synchronize_date_unix(channel_name=channel_item["name"])
+            if (self._is_selected_channel(channel_item["id"]) and self._config_service.is_allowed_channel(
+                    channel_item["name"]) and channel_item["type"] in channel_type) or (channel_type in ["direct", "group"]):
+                if channel_type in ["direct","group"]:
+                    oldest_date = self._config_service.get_last_synchronize_date_unix(channel_name="all")
+                else:
+                    oldest_date = self._config_service.get_last_synchronize_date_unix(channel_name=channel_item["name"])
                 new_start_date = oldest_date
                 self._logger_bot.info("Start loading messages from channel %s, from date - %d", channel_item["name"],
                                       oldest_date)
@@ -163,8 +165,9 @@ class SlackLoadMessages:
                                 self._logger_bot.info("Deleted file %s from %s", files["file_name"],
                                                       files["file_path"])
 
-                    self._config_service.set_last_synchronize_date_unix(new_start_date,
-                                                                        channel_name=channel_item["name"])
+                    if channel_type not in ["direct", "group"]:
+                        self._config_service.set_last_synchronize_date_unix(new_start_date,
+                                                                            channel_name=channel_item["name"])
 
                 text_msg = (f'channel {channel_item["name"]} transfer statistics:\n'
                             f'{CommonCounter.get_str_custom_statistic(self._session_id)}')
@@ -317,26 +320,29 @@ class SlackLoadMessages:
         self.set_channels_list(channels)
 
         for channel in channels:
-            if self._is_selected_channel(self._get_channel(channel)["name"]) \
+            if self._is_selected_channel(self._get_channel(channel)["id"]) \
                     and self._config_service.is_allowed_channel(self._get_channel(channel)["name"]):
                 members = self._load_channel_members(channel)
                 self._set_channels_members(channel, members)
 
-    def load_direct_channels(self):
+    def load_direct_channels(self, messages_type: str):
 
+        if messages_type == "direct":
+            slack_types = "im"
+        else:
+            slack_types = "mpim"
         try:
             max_retries = 3
             retry_count = 0
             next_cursor = ""
             channels_users_list = []
-            self._logger_bot.info(f"Starting request to Slack (dm-channels) | "
+            self._logger_bot.info(f"Starting request to Slack ({messages_type} channels) | "
                                   f"Session: {self._session_id}")
             while retry_count < max_retries:
 
-                response = self._web_client.conversations_list(limit=self._messages_per_page, types="im,mpim")
+                response = self._web_client.conversations_list(limit=self._messages_per_page, types=slack_types)
                 response_code = response.status_code
                 if response_code == self.OK:
-                    # self._logger_bot.info(f'Channels: {response["channels"]}')
                     channels_users_list = response["channels"]
                     next_cursor = response["response_metadata"]["next_cursor"]
                     break
@@ -352,7 +358,7 @@ class SlackLoadMessages:
                 max_retries = 3
                 retry_count = 0
                 while retry_count < max_retries:
-                    response = self._web_client.conversations_list(types="im,mpim",
+                    response = self._web_client.conversations_list(types=slack_types,
                                                                    limit=self._messages_per_page,
                                                                    cursor=next_cursor)
                     if response.status_code == self.OK:
@@ -368,29 +374,31 @@ class SlackLoadMessages:
                     raise SlackApiError(message=f'Timeout after {retry_count} retries',
                                         response={"error": f' Timeout error, {self.REQUEST_TIME_OUT}'})
 
-            self._logger_bot.info(f"Slack direct messages channels loaded - {len(channels_users_list)} |"
+            self._logger_bot.info(f"Slack {messages_type} messages channels loaded - {len(channels_users_list)} |"
                                   f" Session: {self._session_id}")
         except SlackApiError as e:
-            self._logger_bot.error(f"SlackAPIError (conversations_list types=im,mpim): {e.response['error']}"
+            self._logger_bot.error(f"SlackAPIError (conversations_list types={slack_types}): {e.response['error']}"
                                    f" Session: {self._session_id}")
             CommonCounter.increment_error(self._session_id)
             return
         # self._logger_bot.info(f'Channels: {channels_users_list}')
         channels = {}
         for channel in channels_users_list:
+            if self._channel_id_filter_list and channel["id"] not in self._channel_id_filter_list:
+                continue
             if "name" in channel:
                 channel_name = channel["name"]
             else:
                 channel_name = channel["user"]
             channel_id = channel["id"]
-            channel_type = "direct"
+            channel_type = messages_type
             channels[channel["id"]] = {"id": channel_id, "name": channel_name, "type": channel_type}
 
         self.set_channels_list(channels)
         channels_list = channels.copy()
 
         for channel in channels_list:
-            if self._is_selected_channel(self._get_channel(channel)["name"]) \
+            if self._is_selected_channel(self._get_channel(channel)["id"]) \
                     and self._config_service.is_allowed_channel(self._get_channel(channel)["name"]):
                 members = self._load_channel_members(channel)
 
@@ -402,9 +410,6 @@ class SlackLoadMessages:
                     for user in members:
 
                         # self._logger_bot.info(self._users_list.get(user))
-                        if (not (user == self._initial_user_id) and self._user_mails_list and
-                                not self._users_list.get(user)["email"] in self._user_mails_list):
-                            continue
 
                         if (user not in self._users_list
                                 or self._users_list.get(user)["is_bot"]
@@ -422,7 +427,7 @@ class SlackLoadMessages:
     def _load_channel_members(self, channel_id: str) -> list:
 
         try:
-            self._logger_bot.info(f'Starting request to Slack (channels/members) | Session {self._session_id}')
+#            self._logger_bot.info(f'Starting request to Slack (channels/members) | Session {self._session_id}')
             max_retries = 3
             retry_count = 0
             members_list = []
@@ -472,8 +477,8 @@ class SlackLoadMessages:
             CommonCounter.increment_error(self._session_id)
             return []
 
-        self._logger_bot.info(f'Loaded {len(members_list)} members for channel {self._get_channel(channel_id)["name"]} | '
-                              f'Session: {self._session_id}')
+#        self._logger_bot.info(f'Loaded {len(members_list)} members for channel {self._get_channel(channel_id)["name"]} | '
+#                              f'Session: {self._session_id}')
         return members_list
 
     def _set_channels_members(self, channel_id: str, members: list):
@@ -485,16 +490,12 @@ class SlackLoadMessages:
                 break
             i += 1
 
-    def set_channel_filter(self, channel_filter: str):
-        if len(channel_filter) != 0 and channel_filter != "all":
-            self._channel_filter = channel_filter.split(" ")
-
-    def _is_selected_channel(self, channel_name) -> bool:
+    def _is_selected_channel(self, channel_id) -> bool:
         is_channel_selected = False
-        if len(self._channel_filter) == 0:
+        if len(self._channel_id_filter_list) == 0:
             is_channel_selected = True
         else:
-            if channel_name in self._channel_filter:
+            if channel_id in self._channel_id_filter_list:
                 is_channel_selected = True
 
         return is_channel_selected
@@ -596,9 +597,11 @@ class SlackLoadMessages:
             if channel_item["type"] not in channel_type:
                 del self._channels_list[channel_id]
 
-    def set_direct_channels_filter(self, user_mails: str):
-        if user_mails != "all":
-            self._user_mails_list = user_mails.split(" ")
+    def set_channels_filter(self, channel_ids: str):
+        if channel_ids.strip() == "all":
+            self._channel_id_filter_list = []
+        else:
+            self._channel_id_filter_list = channel_ids.strip().split(" ")
 
     def set_mm_upload_msg_instance(self, mm_upload_msg):
         self._mm_upload_msg = mm_upload_msg

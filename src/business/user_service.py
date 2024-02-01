@@ -172,12 +172,10 @@ class UserService:
         return user_entity
 
     def get_user_entity_slack(self, user_id: str) -> UserEntity:
-        user_entity = UserEntity
-        for user in self._users_list_slack:
-            if user.id == user_id:
-                user_entity = user
-                break
-        return user_entity
+        try:
+            return next(user for user in self._users_list_slack if user.id == user_id)
+        except StopIteration:
+            return None  # Возвращаем None, если пользователь с указанным id не найден
 
     def load_team(self, session_id: str):
         self._team_id = self._mattermost_users_handler.load_team(session_id)

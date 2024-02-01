@@ -114,6 +114,7 @@ class MattermostUploadMessages:
                 channels_list.extend(channels)
                 params["page"] += 1
             self._logger_bot.info(f'Mattermost channels loaded ({len(channels_list)})|Session:{self._session_id}')
+
             filtered_channels = []
             for channel in channels_list:
                 if self._is_selected_channel(channel["name"]):
@@ -148,18 +149,21 @@ class MattermostUploadMessages:
         user_data = message_data["user"]
 
         user_id = self._user_service.get_user_id_mattermost_by_email(user_data["user_email"])
+        self._logger_bot.info(f'user_data: {user_data}')
         if not user_id:
             slack_user_entity: UserEntity
             slack_user_entity = self._user_service.get_user_entity_slack(user_data["user_id"])
-            self._logger_bot.info(f'slack_user_entity: {slack_user_entity}')
-            if slack_user_entity and not slack_user_entity.is_bot and slack_user_entity.email is not None:
+            if slack_user_entity is not None:
+                self._logger_bot.info(f'slack_user_entity: {slack_user_entity.as_dict()}')
+                if slack_user_entity.is_bot is not True and slack_user_entity.email is not None:
 
-                user_dict_mm = self._user_service.create_user_mattermost(slack_user_entity, session_id=self._session_id)
-                user_list_mm = [user_dict_mm]
-                if user_list_mm:
-                    self._user_service.load_mattermost(users_list=user_list_mm, session_id=self._session_id)
-                    self._users_list = self._user_service.get_users_mattermost_as_list()
-                    user_id = self._user_service.get_user_id_mattermost_by_email(user_data["user_email"])
+                    user_dict_mm = self._user_service.create_user_mattermost(slack_user_entity,
+                                                                             session_id=self._session_id)
+                    user_list_mm = [user_dict_mm]
+                    if user_list_mm:
+                        self._user_service.load_mattermost(users_list=user_list_mm, session_id=self._session_id)
+                        self._users_list = self._user_service.get_users_mattermost_as_list()
+                        user_id = self._user_service.get_user_id_mattermost_by_email(user_data["user_email"])
 
         if not self._is_user_in_channel(user_id=user_id, channel_id=channel_id) and \
                 not (message_data["channel"]["channel_type"] == "direct") and \
@@ -330,6 +334,8 @@ class MattermostUploadMessages:
             if ((channel["name"] == channel_data["channel_name"])
                     or (channel["display_name"] == channel_data["channel_name"])):
                 channel_id = channel["id"]
+                channel["channel_type"] = channel_data["channel_type"]
+                channel["slack_channel_id"] = channel_data["channel_id"]
                 break
 
         if channel_id is None:
@@ -341,17 +347,13 @@ class MattermostUploadMessages:
 
         channel_id = None
 
-        if channel_data["channel_type"] == "direct":
+        if (channel_data["channel_type"] == "direct") or (channel_data["channel_type"] == "group"):
             dm_users_list = []
             for slack_user_id in channel_data["channel_members"]:
                 dm_users_list.append(self._user_service.get_user_id_mattermost_by_user_id_slack(slack_user_id))
 
-            # for slack_user in dm_users_list:
-
-            # data = [dm_users_list[0],dm_users_list[0]]
-
             response = self._mm_web_client.mattermost_session.post(
-                f'{self._mm_web_client.mattermost_url}/channels/direct', json=dm_users_list)
+                f'{self._mm_web_client.mattermost_url}/channels/{channel_data["channel_type"]}', json=dm_users_list)
         else:
             self._logger_bot.info("Channel %s is creating", channel_data["channel_name"])
 
@@ -371,6 +373,8 @@ class MattermostUploadMessages:
             response_data = response.json()
             channel_id = response_data["id"]
             if not self._get_channel(channel_id):
+                response_data["channel_type"] = channel_data["channel_type"]
+                response_data["slack_channel_id"] = channel_data["channel_id"]
                 self._channels_list.append(response_data)
                 self._logger_bot.info(f'Channel {channel_data["channel_name"]} created|Session:{self._session_id}')
                 self._set_channels_members(channel_id)
@@ -492,8 +496,8 @@ class MattermostUploadMessages:
             response.raise_for_status()
             channel_members = response.json()
 
-            self._logger_bot.info(f'Got members of channel {self._get_channel(channel_id)["name"]}|'
-                                  f'Session:{self._session_id}')
+ #           self._logger_bot.info(f'Got members of channel {self._get_channel(channel_id)["name"]}|'
+ #                                 f'Session:{self._session_id}')
         except Exception as err:
             self._logger_bot.error(
                 f'Mattermost API Error (channels/members). '

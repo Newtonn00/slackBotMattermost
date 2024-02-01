@@ -5,8 +5,8 @@ from typing import List
 from slack_sdk.errors import SlackApiError
 from slack_sdk import WebClient
 
+from src.controller.token_storage import TokenStorage
 from src.util.common_counter import CommonCounter
-from src.util.settings_parser import SettingsParser
 from src.entity.bookmark_entity import BookmarkEntity
 
 
@@ -17,10 +17,8 @@ class SlackLoadBookmarks:
     OK = 200
 
     def __init__(self):
-        settings = SettingsParser()
         self._logger_bot = logging.getLogger("")
-        self._web_client = WebClient(settings.slack_bot_token)
-        self._slack_token = settings.slack_bot_token
+        self._web_client = None
         self._messages_per_page = 1004
 
     def _map_dict_to_bookmark_entity(self, data: dict) -> BookmarkEntity:
@@ -34,6 +32,8 @@ class SlackLoadBookmarks:
 
     def load_bookmarks(self, channel_id: str, session_id: str) -> List[BookmarkEntity]:
         bookmarks = []
+        if not self._web_client:
+            self._web_client = WebClient(TokenStorage.get_slack_token(session_id))
         try:
             max_retries = 3
             retry_count = 0
