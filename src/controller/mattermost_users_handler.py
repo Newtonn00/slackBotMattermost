@@ -2,6 +2,7 @@ import logging
 
 from requests import HTTPError
 
+from src.entity.user_entity import UserEntity
 from src.util.common_counter import CommonCounter
 
 
@@ -12,6 +13,24 @@ class MattermostUsersHandler:
         self._logger_bot = logging.getLogger("")
         self._mm_web_client = mattermost_web_client
         self._messages_per_page = 100
+
+    def _map_dict_to_user_entity(self, user: dict) -> UserEntity:
+
+        user_entity = UserEntity(id=user.get("id"),
+                                 name=user.get("username"),
+                                 display_name=user.get("nickname") if "profile" in user and user[
+                                     "profile"] is not None else user.get("real_name"),
+                                 title=user.get("position"),
+                                 first_name=user.get("first_name"),
+                                 last_name=user.get("last_name"),
+                                 email=user.get("email"),
+                                 is_bot=user.get("is_bot") if "is_bot" in user else False,
+                                 is_deleted=False,
+                                 is_app_user=False,
+                                 image_original=""
+                                 )
+
+        return user_entity
 
     def load(self, session_id: str) -> list:
 
@@ -40,7 +59,7 @@ class MattermostUsersHandler:
         except HTTPError as err:
             self._logger_bot.error(
                 f'Mattermost API Error (users). Status code: {response.status_code} '
-                f'Response:{response.text} Error:{err} Session:{session_id}')
+                f'Response:{response.text} Error:{err} | Session:{session_id}')
             CommonCounter.increment_error(session_id)
 
         return self._users_list
@@ -51,12 +70,12 @@ class MattermostUsersHandler:
         if response.status_code == 200:
             response_data = response.json()
             team_id = response_data[0]["id"]
-            self._logger_bot.info(f'Mattermost team_id loaded - {team_id}|Session:{session_id}')
-            self._logger_bot.info(f'Teams: {response_data}|Session:{session_id}')
+            self._logger_bot.info(f'Mattermost team_id loaded - {team_id} | Session:{session_id}')
+            self._logger_bot.info(f'Teams: {response_data} | Session:{session_id}')
         else:
             self._logger_bot.error(
                 f'Mattermost API Error (teams). Status code: {response.status_code} '
-                f'Response:{response.text} Session:{session_id}')
+                f'Response:{response.text} | Session:{session_id}')
             CommonCounter.increment_error(session_id)
 
         return team_id
@@ -73,7 +92,7 @@ class MattermostUsersHandler:
             user_dict = response.json()
             user_id = user_dict["id"]
             if "name" in user_dict:
-                self._logger_bot.info(f'User {user_dict["name"]} created|Session:{session_id}')
+                self._logger_bot.info(f'User {user_dict["name"]} created | Session:{session_id}')
 
             self._add_user_to_team(user_id=user_id, team_id=user_data["team_id"], session_id=session_id)
 
@@ -154,3 +173,30 @@ class MattermostUsersHandler:
                 f'Mattermost API Error (users/image). Status code: {response_file.status_code} '
                 f'Response:{response_file.text} Session:{session_id}')
             CommonCounter.increment_error(session_id)
+
+    def get_user_by_email(self, session_id: str, email: str) -> UserEntity:
+
+        response = ''
+        user_data = {}
+        user_entity = None
+        try:
+            data = {
+                "email": email
+            }
+            response = self._mm_web_client.mattermost_session.get(
+                f'{self._mm_web_client.mattermost_url}/users/email/{email}', data=data)
+            response.raise_for_status()
+            user_data = response.json()
+
+            self._logger_bot.info(f'Mattermost users info by mail {email} loaded | Session:{session_id}')
+
+        except HTTPError as err:
+            self._logger_bot.error(
+                f'Mattermost API Error (user info). Status code: {response.status_code} '
+                f'Response:{response.text} Error:{err} | Session:{session_id}')
+            CommonCounter.increment_error(session_id)
+
+        if user_data:
+            user_entity = self._map_dict_to_user_entity(user_data)
+
+        return user_entity

@@ -5,6 +5,7 @@ from typing import List
 from slack_sdk.errors import SlackApiError
 from slack_sdk import WebClient
 
+
 from src.controller.token_storage import TokenStorage
 from src.util.common_counter import CommonCounter
 from src.entity.pin_entity import PinEntity
@@ -31,6 +32,7 @@ class SlackLoadPins:
         return pin_entity
 
     def load_pins(self, channel_id: str, session_id: str) -> List[PinEntity]:
+
         pinned_messages = []
         if not self._web_client:
             self._web_client = WebClient(TokenStorage.get_slack_token(session_id))

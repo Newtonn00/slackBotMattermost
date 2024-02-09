@@ -4,3 +4,6 @@ requests~=2.31.0
 slack-bolt~=1.18.0
 slack-sdk~=3.23.0
 flask
+aiohttp~=3.8.6
+gunicorn~=21.2.0
+gevent~=23.9.1

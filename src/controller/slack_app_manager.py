@@ -1,8 +1,12 @@
-import aiohttp
-import asyncio
-from aiohttp import web
-from slack_bolt.async_app import AsyncApp
-from src.controller.async_slack_request_handler import AsyncSlackRequestHandler
+import time
+
+import requests
+from slack_bolt import App
+from flask import Flask, request, has_request_context, current_app
+from slack_bolt.adapter.flask import SlackRequestHandler
+from concurrent.futures import ThreadPoolExecutor
+
+from src.controller.channel_lock import ChannelLock
 from src.controller.config_dto_schema import ConfigDTOSchema
 import logging
 
@@ -21,19 +25,21 @@ class SlackAppManager:
         cls.container = container_instance
 
     def __init__(self, config_service, user_service):
+        self.emoji_service = None
         self.logger_bot = logging.getLogger("")
         self._mattermost_upload_messages_id = None
         self._mattermost_upload_messages_state = None
-
+        self.executor = ThreadPoolExecutor(max_workers=10)
         self._settings = SettingsParser()
         bot_token = self._settings.slack_bot_token
         self.app_token = self._settings.slack_app_token
         signing_secret = self._settings.slack_signing_secret
         self._client_id = self._settings.slack_client_id
         self._client_secret = self._settings.slack_client_secret
-        self.app = AsyncApp(token=bot_token, signing_secret=signing_secret)
-        self.aiohttp_app = aiohttp.web.Application()
-        self.handler = AsyncSlackRequestHandler(self.app)
+        self.app = App(token=bot_token, signing_secret=signing_secret)
+        self.app.client.apps_connections_open(app_token=self.app_token)
+        self.flask_app = Flask(__name__)
+        self.handler = SlackRequestHandler(self.app)
 
         self._config_service = config_service
         self._get_config_command = self._settings.get_config_command
@@ -44,31 +50,43 @@ class SlackAppManager:
         self._start_dm_integration_command = self._settings.start_dm_integration_command
         self._thread_update = "/thread_update"
         self._start_group_integration_command = "/start_group_integration"
+        self._emoji_integration_command = "/emoji_transfer"
+
         self._sync_users_command = self._settings.sync_users_command
         self._user_service = user_service
         self.register_commands()
 
-        self.aiohttp_app.router.add_post("/slack/events", self.slack_events)
-        self.aiohttp_app.router.add_get("/auth/redirect", self.auth_redirect)
+        #        self.aiohttp_app.router.add_post("/slack/events", self.slack_events)
+        #        self.aiohttp_app.router.add_get("/auth/redirect", self.auth_redirect)
         self.user_session = {}
 
-    async def slack_events(self, request_txt):
-        return await self.handler.handle(request_txt)
+        @self.flask_app.route("/slack/events", methods=["POST"])
+        def slack_events():
+            self.executor.submit(self.handler.handle(request))
+            return "Request processing started"
 
-    async def auth_redirect(self, request_txt):
+        @self.flask_app.route("/auth/redirect", methods=["GET"])
+        def auth_redirect():
+            code = request.args.get('code')
+            session_id = request.args.get('state')
+            future = self.executor.submit(self.handle_auth_redirect, code, session_id)
+            result = future.result()
+            return result
+
+    def handle_auth_redirect(self, code, session_id):
         # Получаем код из параметра запроса
-        code = request_txt.query.get('code')
-        session_id = request_txt.query.get('state')
+
+        #            code = request_txt.args.get('code')
         # Обмениваем код на токен доступа
-        user_data = await self.exchange_code_for_token(code, session_id)
+        user_data = self.exchange_code_for_token(code, session_id)
         if session_id in self.user_session:
             self.user_session[session_id]["access_token"] = user_data["access_token"]
             self.user_session[session_id]["token_date_unix"] = datetime.now().timestamp()
             self.start_integration_dm(self.user_session[session_id])
-            return aiohttp.web.Response(text=CommonCounter.get_str_statistic(session_id))
+            return CommonCounter.get_str_statistic(session_id)
         else:
             self.logger_bot.info(f'Did`nt find session {session_id}')
-            return aiohttp.web.Response(text=f'Did`nt find session {session_id}\n Repeat, please')
+            return f'Did`nt find session {session_id}\n Repeat, please'
 
     def register_commands(self):
         self.app.command(self._get_config_command)(self.get_config)
@@ -80,11 +98,42 @@ class SlackAppManager:
         self.app.command(self._start_dm_integration_command)(self.start_dm_integration)
         self.app.command(self._thread_update)(self.thread_update)
         self.app.command(self._start_group_integration_command)(self.start_group_integration)
+        self.app.command(self._emoji_integration_command)(self.emoji_integration)
 
-    async def thread_update(self, ack, respond, command):
-        await ack()
+    def emoji_integration(self, ack, respond, command):
+        ack()
         session_id = secrets.token_urlsafe(16)
-        await respond("Updating threads started")
+        TokenStorage.set_slack_token(session_id=session_id, slack_token=self._settings.slack_bot_token)
+        CommonCounter.init_counter(session_id)
+        user_id = command["user_id"]
+        self.emoji_service = self.container.emoji_service()
+        command_params = command['text']
+        command_list = []
+        if len(command_params) > 0:
+            command_list = command_params.split(" ")
+        if len(command_list) > 1:
+            TokenStorage.set_mm_token(session_id=session_id, mm_token=command_list[0])
+            self.emoji_service.set_emoji_count(int(command_list[1]))
+        elif len(command_list) == 1:
+            TokenStorage.set_mm_token(session_id=session_id, mm_token=command_list[0])
+        else:
+            self.logger_bot.info(f'Emoji transfer is canceled - no params | Session: {session_id}')
+            respond("Emoji transfer is canceled - no params")
+            TokenStorage.delete_session(session_id)
+            return
+        respond("Emoji transfer started")
+        self.logger_bot.info(f'Emoji transfer started | Session: {session_id}')
+        self.emoji_service.set_main_user(user_id)
+        self.emoji_service.process(session_id)
+        self.logger_bot.info(CommonCounter.get_str_statistic(session_id))
+        self.logger_bot.info(f'Emoji transfer finished | Session: {session_id}')
+        TokenStorage.delete_session(session_id)
+        respond("Emoji transfer finished")
+
+    def thread_update(self, ack, respond, command):
+        ack()
+        session_id = secrets.token_urlsafe(16)
+        respond("Updating threads started")
         self.logger_bot.info(f'Updating threads started | Session: {session_id}')
         command_params = command['text']
         user_id = command["user_id"]
@@ -92,7 +141,7 @@ class SlackAppManager:
             self.logger_bot.info(f'Got command option - {command_params} | Session: {session_id}')
         else:
             self.logger_bot.info(f'Updating threads is canceled: no params | Session: {session_id}')
-            await respond("Updating thread is canceled: no params")
+            respond("Updating thread is canceled: no params")
             return
 
         CommonCounter.init_counter(session_id)
@@ -115,7 +164,6 @@ class SlackAppManager:
         thread_service_instance.set_slack_channels_list(slack_load_messages_instance.get_channels_list())
         thread_service_instance.set_slack_users_list(slack_load_messages_instance.get_users_list())
         mm_upload_messages_instance.load_channels()
-        mm_upload_messages_instance.load_team_id()
 
         thread_service_instance.set_mm_channels_list(mm_upload_messages_instance.get_channel_list())
         thread_service_instance.process()
@@ -123,9 +171,9 @@ class SlackAppManager:
 
         self.logger_bot.info(f'Updating threads finished | Session:{session_id}')
 
-        await respond("Updating threads finished")
+        respond("Updating threads finished")
 
-    async def exchange_code_for_token(self, code, session_id) -> dict:
+    def exchange_code_for_token(self, code, session_id) -> dict:
         user_data = {}
         url = 'https://slack.com/api/oauth.v2.access'
         data = {
@@ -134,20 +182,19 @@ class SlackAppManager:
             'code': code
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=data) as response:
-                response_json = await response.json()
-                self.logger_bot.info(f'Response: {response_json} | Session: {session_id}')
-                if not response_json["ok"]:
-                    self.logger_bot.info(f'Exchange code {code} error: {response_json["error"]} | Session: {session_id}')
-                else:
-                    user_data["access_token"] = response_json.get("authed_user").get("access_token")
-                    user_data["id"] = response_json.get("authed_user").get("id")
-                    #self.logger_bot.info(f'User data: {user_data}')
+        response = requests.post(url, data=data)
+        response_json = response.json()
+        self.logger_bot.info(f'Response: {response_json} | Session: {session_id}')
+        if not response_json["ok"]:
+            self.logger_bot.info(f'Exchange code {code} error: {response_json["error"]} | Session: {session_id}')
+        else:
+            user_data["access_token"] = response_json.get("authed_user").get("access_token")
+            user_data["id"] = response_json.get("authed_user").get("id")
+            # self.logger_bot.info(f'User data: {user_data}')
         return user_data
 
-    async def start_group_integration(self, ack, respond, command):
-        await ack()
+    def start_group_integration(self, ack, respond, command):
+        ack()
 
         command_params = command['text']
         session_id = secrets.token_urlsafe(16)
@@ -156,7 +203,7 @@ class SlackAppManager:
             self.logger_bot.info(f'Command option got - {command_params} | Session:{session_id}')
         else:
             self.logger_bot.info(f'Transfer group messages is canceled: no params | Session:{session_id}')
-            await respond("Transfer group messages is canceled: no params")
+            respond("Transfer group messages is canceled: no params")
             return
 
         user_id = command["user_id"]
@@ -169,48 +216,47 @@ class SlackAppManager:
         for user_session_data in user_sessions:
             if user_session_data["access_token"] and datetime.now().timestamp() - user_session_data[
                 "token_date_unix"] < 3600:
-                self.user_session = {
-                    session_id: {
-                        "user_id": user_id,
-                        "command_params": command_params,
-                        "session_id": session_id,
-                        "access_token": user_session_data["access_token"],
-                        "token_date_unix": datetime.now().timestamp(),
-                        "request_type": "group",
-                        "status": "open"
+                self.user_session[session_id] = {
 
-                    }
+                    "user_id": user_id,
+                    "command_params": command_params,
+                    "session_id": session_id,
+                    "access_token": user_session_data["access_token"],
+                    "token_date_unix": datetime.now().timestamp(),
+                    "request_type": "group",
+                    "status": "open"
+
                 }
+
                 break
         if self.user_session.get(session_id):
-            await respond("Transfer group messages started")
+            respond("Transfer group messages started")
             self.logger_bot.info(f'Transfer group messages started | Session: {session_id}')
             self.start_integration_dm(self.user_session[session_id])
-            await respond("Transfer group messages finished")
+            respond("Transfer group messages finished")
 
         else:
 
             # Генерируем ссылку для предоставления разрешения
             authorize_url = self.get_authorize_url(session_id, user_id)
 
-            self.user_session = {
-                session_id: {
-                    "user_id": user_id,
-                    "command_params": command_params,
-                    "session_id": session_id,
-                    "status": "open",
-                    "access_token": "",
-                    "token_date_unix": 0,
-                    "request_type": "group"
-                }
+            self.user_session[session_id] = {
+
+                "user_id": user_id,
+                "command_params": command_params,
+                "session_id": session_id,
+                "status": "open",
+                "access_token": "",
+                "token_date_unix": 0,
+                "request_type": "group"
             }
 
-            await respond(
+            respond(
                 f'Вам нужно предоставить разрешение на доступ к вашему приложению.\n {authorize_url}')
         # Отправляем сообщение с ссылкой в канал пользователя
 
-    async def start_dm_integration(self, ack, respond, command):
-        await ack()
+    def start_dm_integration(self, ack, respond, command):
+        ack()
 
         command_params = command['text']
         session_id = secrets.token_urlsafe(16)
@@ -219,8 +265,9 @@ class SlackAppManager:
         if len(command_params) != 0:
             self.logger_bot.info(f'Command option got - {command_params} | User: {user_id} | Session:{session_id}')
         else:
-            self.logger_bot.info(f'Transfer direct messages is canceled: no params | User: {user_id} | Session:{session_id}')
-            await respond("Transfer direct messages is canceled: no params")
+            self.logger_bot.info \
+                (f'Transfer direct messages is canceled: no params | User: {user_id} | Session:{session_id}')
+            respond("Transfer direct messages is canceled: no params")
             return
 
         user_sessions = []
@@ -230,70 +277,69 @@ class SlackAppManager:
                 user_sessions.append(session_data)
 
         for user_session_data in user_sessions:
-            if user_session_data["access_token"] and datetime.now().timestamp() - user_session_data["token_date_unix"] < 3600:
-                self.user_session = {
-                    session_id: {
-                        "user_id": user_id,
-                        "command_params": command_params,
-                        "session_id": session_id,
-                        "access_token": user_session_data["access_token"],
-                        "token_date_unix": datetime.now().timestamp(),
-                        "request_type": "direct",
-                        "status": "open"
+            if user_session_data["access_token"] and datetime.now().timestamp() - user_session_data[
+                "token_date_unix"] < 3600:
+                self.user_session[session_id] = {
 
-                    }
+                    "user_id": user_id,
+                    "command_params": command_params,
+                    "session_id": session_id,
+                    "access_token": user_session_data["access_token"],
+                    "token_date_unix": datetime.now().timestamp(),
+                    "request_type": "direct",
+                    "status": "open"
+
                 }
+
                 break
         if self.user_session.get(session_id):
-            await respond("Transfer direct messages started")
+            respond("Transfer direct messages started")
             self.logger_bot.info(f'Transfer direct messages started | User: {user_id} | Session: {session_id}')
             self.start_integration_dm(self.user_session[session_id])
-            await respond("Transfer messages finished")
+            respond("Transfer messages finished")
 
         else:
 
             # Генерируем ссылку для предоставления разрешения
             authorize_url = self.get_authorize_url(session_id, user_id)
 
-            self.user_session = {
-                session_id: {
-                    "user_id": user_id,
-                    "command_params": command_params,
-                    "session_id": session_id,
-                    "status": "open",
-                    "access_token": "",
-                    "token_date_unix": 0,
-                    "request_type": "direct"
+            self.user_session[session_id] = {
+                "user_id": user_id,
+                "command_params": command_params,
+                "session_id": session_id,
+                "status": "open",
+                "access_token": "",
+                "token_date_unix": 0,
+                "request_type": "direct"
             }
-        }
 
-            await respond(
+            respond(
                 f'Вам нужно предоставить разрешение на доступ к вашему приложению.\n {authorize_url}')
         # Отправляем сообщение с ссылкой в канал пользователя
 
-    async def sync_users(self, ack, respond, command):
-        await ack()
+    def sync_users(self, ack, respond, command):
+        ack()
         session_id = secrets.token_urlsafe(16)
         self.logger_bot.info(f'Sync users started | Session: {session_id}')
-        await respond("Sync users started")
+        respond("Sync users started")
         command_params = command['text']
         self._user_service.set_params(command_params)
         self._user_service.sync_process(session_id)
         self.logger_bot.info(f'Sync users finished | Session: {session_id}')
-        await respond("Sync users finished")
+        respond("Sync users finished")
 
-    async def get_config(self, ack, respond, command):
-        await ack()
+    def get_config(self, ack, respond, command):
+        ack()
         session_id = secrets.token_urlsafe(16)
         self.logger_bot.info(f'Config selection started | Session: {session_id}')
         config_entity = self._config_service.get_config()
         config_schema = ConfigDTOSchema()
         config_json = config_schema.dumps(obj=config_entity)
         self.logger_bot.info(f'Config selection finished | Session: {session_id}')
-        await respond(config_json)
+        respond(config_json)
 
-    async def set_excluded_channels(self, ack, respond, command):
-        await ack()
+    def set_excluded_channels(self, ack, respond, command):
+        ack()
         command_params = command['text']
         self.logger_bot.info("Channels setting started")
         if len(command_params) != 0:
@@ -302,10 +348,10 @@ class SlackAppManager:
         config_schema = ConfigDTOSchema()
         config_json = config_schema.dump(obj=new_config_entity)
         self.logger_bot.info("Channels setting finished")
-        await respond("Channels setting finished")
+        respond("Channels setting finished")
 
-    async def set_excluded_users(self, ack, respond, command):
-        await ack()
+    def set_excluded_users(self, ack, respond, command):
+        ack()
         command_params = command['text']
         self.logger_bot.info("Users setting started")
         if len(command_params) != 0:
@@ -314,10 +360,10 @@ class SlackAppManager:
         config_schema = ConfigDTOSchema()
         config_json = config_schema.dump(obj=new_config_entity)
         self.logger_bot.info("Users setting finished")
-        await respond("Users setting finished")
+        respond("Users setting finished")
 
-    async def set_date_integration(self, ack, respond, command):
-        await ack()
+    def set_date_integration(self, ack, respond, command):
+        ack()
         command_params = command['text']
 
         self.logger_bot.info("Date setting started")
@@ -329,16 +375,16 @@ class SlackAppManager:
                 channel_name=params[0])
         else:
             self.logger_bot.info("Date setting is canceled: no params")
-            await respond("Date setting is canceled: no params")
+            respond("Date setting is canceled: no params")
             return
         self.logger_bot.info("Date setting finished")
-        await respond("Date setting finished")
+        respond("Date setting finished")
 
-    async def start_integration(self, ack, respond, command):
-        await ack()
+    def start_integration(self, ack, respond, command):
+        ack()
         session_id = secrets.token_urlsafe(16)
         user_id = command["user_id"]
-        await respond("Transfer messages started")
+        respond("Transfer messages started")
         self.logger_bot.info(f'Transfer messages started | User: {user_id} | Session: {session_id}')
         command_params = command['text']
         TokenStorage.set_slack_token(session_id=session_id, slack_token=self._settings.slack_bot_token)
@@ -347,7 +393,7 @@ class SlackAppManager:
             self.logger_bot.info(f'Command option was got - {command_params} | Session: {session_id}')
         else:
             self.logger_bot.info(f'Transfer messages is canceled: no params | Session: {session_id}')
-            await respond("Transfer messages is canceled: no params")
+            respond("Transfer messages is canceled: no params")
             return
         CommonCounter.init_counter(session_id)
 
@@ -371,7 +417,6 @@ class SlackAppManager:
         #        mm_upload_messages_instance.load_users()
 
         mm_upload_messages_instance.load_channels()
-        mm_upload_messages_instance.load_team_id()
 
         slack_load_messages_instance.load_channel_messages(["public", "private"])
         pin_service_instance.set_mm_channels_list(mm_upload_messages_instance.get_channel_list())
@@ -385,7 +430,7 @@ class SlackAppManager:
 
         self.logger_bot.info(f'Transfer messages finished | Session: {session_id}')
 
-        await respond("Transfer messages finished")
+        respond("Transfer messages finished")
 
     def start_integration_dm(self, user_session_data: dict):
 
@@ -420,7 +465,6 @@ class SlackAppManager:
         pin_service_instance.set_session_id(session_id)
         bookmark_service_instance.set_session_id(session_id)
 
-        mm_upload_messages_instance.load_team_id()
         mm_upload_messages_instance.set_main_slack_user_id(user_id)
         slack_load_messages_instance.load_channel_messages(request_type)
 
@@ -468,21 +512,13 @@ class SlackAppManager:
                          f'user={user_id}')
         return authorize_url
 
-    async def run(self, port=3005):
+    def cleanup_process(self):
+        while True:
+            ChannelLock.clean_locked_channels()
+            # Логика очистки данных, например, удаление устаревших записей из словарей
+            time.sleep(300)
 
-        await self.app.client.apps_connections_open(app_token=self.app_token)
-        # Создаем экземпляр AppRunner
-        runner = web.AppRunner(self.aiohttp_app)
-        await runner.setup()
-
-        # Создаем экземпляр TCPSite
-        site = web.TCPSite(runner, '0.0.0.0', 3005)
-
-        await site.start()
-
-        self.logger_bot.info("Slack bot version 2.0 started")
-
-        try:
-            await asyncio.Event().wait()  # Run until interrupted
-        finally:
-            await runner.cleanup()
+    def run(self, port=3005):
+        self.logger_bot.info("Slack bot version 2.1 started")
+        self.executor.submit(self.cleanup_process)
+        self.flask_app.run(port=port, host="0.0.0.0", debug=False)

@@ -1,10 +1,13 @@
 from datetime import datetime
+from threading import Lock
+
 from src.entity.config_entity import ConfigEntity
 
 
 class ConfigService:
     def __init__(self, config_repo):
         self._config_repo = config_repo
+        self._lock = Lock()
 
     def get_config(self) -> ConfigEntity:
         return self._config_repo.read_config()
@@ -40,13 +43,14 @@ class ConfigService:
         return self._config_repo.read_config()
 
     def set_last_synchronize_date_unix(self, timestmp: float, channel_name="all") -> ConfigEntity:
+        with self._lock:
+            last_datetime_synchronize = datetime.fromtimestamp(timestmp).strftime("%Y-%m-%d %H:%M:%S")
+            config_entity: ConfigEntity = self._config_repo.read_config()
 
-        last_datetime_synchronize = datetime.fromtimestamp(timestmp).strftime("%Y-%m-%d %H:%M:%S")
-        config_entity: ConfigEntity = self._config_repo.read_config()
+            config_entity.last_datetime_synchronize[channel_name] = last_datetime_synchronize
 
-        config_entity.last_datetime_synchronize[channel_name] = last_datetime_synchronize
 
-        self._config_repo.save_config(config_entity)
+            self._config_repo.save_config(config_entity)
         return self._config_repo.read_config()
 
     def is_allowed_channel(self, channel_name: str) -> bool:

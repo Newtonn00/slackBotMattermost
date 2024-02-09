@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import sys
 from logging.handlers import TimedRotatingFileHandler
@@ -23,4 +22,4 @@ container = Containers()
 app_manager = container.slack_app_manager()
 SlackLoadMessages.set_container_instance(container)
 SlackAppManager.set_container_instance(container)
-asyncio.run(app_manager.run())
+app_manager.run()

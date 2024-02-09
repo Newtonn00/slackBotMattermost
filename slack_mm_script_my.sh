@@ -15,5 +15,5 @@ ssh "$REMOTE_USER@$REMOTE_SERVER" << EOF
 
   # Шаг 4: Запуск команды docker-compose up
   docker-compose pull
-    docker-compose up -d
+  docker-compose up -d
 EOF

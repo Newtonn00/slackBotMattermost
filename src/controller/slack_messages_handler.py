@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 
 import requests
 from slack_sdk.errors import SlackApiError
@@ -26,6 +27,7 @@ class SlackMessagesHandler:
 
     def load_threads(self, channel_id: str, ts_of_parent_message, session_id: str, oldest_date=0) -> list:
         try:
+            time.sleep(2)
             response = self._web_client.conversations_replies(
                 channel=channel_id,
                 ts=ts_of_parent_message,

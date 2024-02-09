@@ -1,6 +1,7 @@
 import logging
 from typing import List
 
+from src.controller.channel_lock import ChannelLock
 from src.entity.pin_entity import PinEntity
 from src.util.common_counter import CommonCounter
 
@@ -29,6 +30,12 @@ class PinService:
         self._apply_filter_to_slack_channel()
 
         for channel_key, channel_item in self._slack_channels_list.items():
+
+            locked_channel = ChannelLock.lock_channel(channel_id=channel_key, session_id=self._session_id)
+            if not locked_channel["ok"]:
+                self._logger_bot.info(f'{locked_channel["message"]} | Session: {self._session_id}')
+                continue
+
             mm_pin_list: List[PinEntity]
             slack_pin_list = self._get_pins(channel_key)
             if channel_item["type"] in ["public", "private"]:
@@ -40,6 +47,8 @@ class PinService:
             else:
                 self._logger_bot.info(f'Channel {channel_item["name"]} not found in Mattermost')
                 CommonCounter.increment_error(self._session_id)
+                ChannelLock.release_channel(channel_id=channel_key, session_id=self._session_id)
+
                 break
 
             for pin in slack_pin_list:
@@ -71,6 +80,7 @@ class PinService:
 
                     if post_id:
                         self._mattermost_pins.pin(post_id, self._session_id)
+            ChannelLock.release_channel(channel_id=channel_key, session_id=self._session_id)
 
     def _get_pins(self, channel_id) -> List[PinEntity]:
         pin_list = self._slack_load_pins.load_pins(channel_id=channel_id, session_id=self._session_id)

@@ -163,6 +163,15 @@ class UserService:
                     break
         return mm_user_id
 
+    def get_user_id_mattermost_by_user_id_slack_direct(self, slack_user_id: str, session_id: str) -> str:
+        mm_user_id = ""
+        user_entity_slack = self._slack_users_handler.get_user_by_id(user_id=slack_user_id, session_id=session_id)
+        if user_entity_slack:
+            mm_user_entity = self._mattermost_users_handler.get_user_by_email(email=user_entity_slack.email, session_id=session_id)
+            if mm_user_entity:
+                mm_user_id = mm_user_entity.id
+        return mm_user_id
+
     def _get_user_entity_mattermost(self, user_id: str) -> UserEntity:
         user_entity = UserEntity
         for user in self._users_list_mattermost:
@@ -241,3 +250,6 @@ class UserService:
 
         if filter_params:
             self._users_filter = filter_params.lower().split(" ")
+
+    def get_team_id(self) -> str:
+        return self._team_id

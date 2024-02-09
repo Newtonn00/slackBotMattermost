@@ -1,4 +1,7 @@
+import logging
 from datetime import datetime, timedelta
+
+from src.controller.channel_lock import ChannelLock
 
 
 class ThreadService:
@@ -16,6 +19,7 @@ class ThreadService:
         self._channel_filter = []
         self._user_service = user_service
         self._session_id = None
+        self._logger_bot = logging.getLogger("")
 
     def process(self):
         self._user_service.load_slack(self._session_id)
@@ -25,6 +29,12 @@ class ThreadService:
         self._message_service.set_users_list(self._slack_users_list)
         self._message_service.set_channels_list(self._slack_channels_list)
         for channel_key, channel_item in self._slack_channels_list.items():
+
+            locked_channel = ChannelLock.lock_channel(channel_id=channel_key, session_id=self._session_id)
+            if not locked_channel["ok"]:
+                self._logger_bot.info(f'{locked_channel["message"]} | Session: {self._session_id}')
+                continue
+
             mm_channel_id = self._get_mm_channel_id_by_name(channel_item["name"])["id"]
             date_for_selection_messages = int((datetime.now() - timedelta(days=90)).timestamp())
             mm_messages_dict = self._mattermost_messages.load_messages(mm_channel_id, self._session_id)
@@ -59,7 +69,7 @@ class ThreadService:
                         else:
                             message["is_attached"] = False
                         self._upload_message_to_mattermost(message)
-
+            ChannelLock.release_channel(channel_id=channel_key, session_id=self._session_id)
 
     def _upload_message_to_mattermost(self, message: dict):
         self._message_service.save_reply_to_mattermost(message)

@@ -6,6 +6,7 @@ import requests
 from slack_sdk.errors import SlackApiError
 from slack_sdk import WebClient
 
+from src.controller.channel_lock import ChannelLock
 from src.util.common_counter import CommonCounter
 from src.util.settings_parser import SettingsParser
 
@@ -65,18 +66,25 @@ class SlackLoadMessages:
         self._messages_service.set_users_list(self._users_list)
         self._messages_service.set_channels_list(self._channels_list)
 
-        self._logger_bot.info(f'Loading messages from {channel_type} channels')
+        self._logger_bot.info(f'Loading messages from {channel_type} channels | Session: {self._session_id}')
         for channel_id, channel_item in self._channels_list.items():
 
             if (self._is_selected_channel(channel_item["id"]) and self._config_service.is_allowed_channel(
                     channel_item["name"]) and channel_item["type"] in channel_type) or (channel_type in ["direct", "group"]):
+
+                locked_channel = ChannelLock.lock_channel(channel_id=channel_id, session_id=self._session_id)
+                if not locked_channel["ok"]:
+                    self._logger_bot.info(f'{locked_channel["message"]} | Session: {self._session_id}')
+                    continue
+
                 if channel_type in ["direct","group"]:
                     oldest_date = self._config_service.get_last_synchronize_date_unix(channel_name="all")
                 else:
                     oldest_date = self._config_service.get_last_synchronize_date_unix(channel_name=channel_item["name"])
+
                 new_start_date = oldest_date
-                self._logger_bot.info("Start loading messages from channel %s, from date - %d", channel_item["name"],
-                                      oldest_date)
+                self._logger_bot.info(f'Start loading messages from channel {channel_item["name"]}, from date - {oldest_date} '
+                                      f'| Session: {self._session_id}')
                 cursor = None
 
                 messages = []
@@ -175,9 +183,11 @@ class SlackLoadMessages:
                 self._logger_bot.info(text_msg)
 
                 self._slack_messages_handler.send_message(self._initial_user_id, text_msg, self._session_id)
+                ChannelLock.release_channel(channel_id=channel_id, session_id=self._session_id)
 
     def load_threads(self, channel_id, ts_of_parent_message, oldest_date) -> list:
         try:
+            time.sleep(2)
             response = self._web_client.conversations_replies(
                 channel=channel_id,
                 ts=ts_of_parent_message,
@@ -512,7 +522,7 @@ class SlackLoadMessages:
                                       f' | Session: {self._session_id}')
                 continue
 
-            self._logger_bot.info(f'{files["name"]} is downloading')
+            self._logger_bot.info(f'{files["name"]} is downloading | Session: {self._session_id}')
             response_file = requests.get(files["url_private_download"],
                                          headers={
                                              'Authorization': 'Bearer %s' % self._slack_token})

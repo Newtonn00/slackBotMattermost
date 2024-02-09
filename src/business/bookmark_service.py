@@ -1,6 +1,7 @@
 import logging
 from typing import List
 
+from src.controller.channel_lock import ChannelLock
 from src.entity.bookmark_entity import BookmarkEntity
 from src.util.common_counter import CommonCounter
 
@@ -21,6 +22,12 @@ class BookmarkService:
 #        self._apply_filter_to_mm_channel()
         self._apply_filter_to_slack_channel()
         for channel_key, channel_item in self._slack_channels_list.items():
+
+            locked_channel = ChannelLock.lock_channel(channel_id=channel_key, session_id=self._session_id)
+            if not locked_channel["ok"]:
+                self._logger_bot.info(f'{locked_channel["message"]} | Session: {self._session_id}')
+                continue
+
             slack_bookmark_list = self._get_slack_bookmarks(channel_key)
 
             if channel_item["type"] in ["public", "private"]:
@@ -33,6 +40,8 @@ class BookmarkService:
             else:
                 self._logger_bot.info(f'Channel {channel_item["name"]} not found in Mattermost')
                 CommonCounter.increment_error(self._session_id)
+                ChannelLock.release_channel(channel_id=channel_key, session_id=self._session_id)
+
                 break
 
             for bookmark in slack_bookmark_list:
@@ -41,6 +50,8 @@ class BookmarkService:
             if slack_bookmark_list:
                 bookmark_data = self._collect_bookmarks_data(slack_bookmark_list)
                 self._mattermost_bookmarks.update_channel_header(bookmark_data, mm_channel_id, self._session_id)
+
+            ChannelLock.release_channel(channel_id=channel_key, session_id=self._session_id)
 
     def _collect_bookmarks_data(self, bookmark_list: List[BookmarkEntity]) -> str:
         bookmark_data: str = ""

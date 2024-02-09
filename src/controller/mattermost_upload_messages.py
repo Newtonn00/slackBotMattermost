@@ -94,6 +94,7 @@ class MattermostUploadMessages:
             CommonCounter.increment_error(self._session_id)
 
     def load_channels(self):
+
         response = ''
         params = {
             "page": 0,
@@ -132,7 +133,10 @@ class MattermostUploadMessages:
             CommonCounter.increment_error(self._session_id)
 
     def upload_messages(self, message_data):
+        self._logger_bot.info(self._mm_web_client.mattermost_session.headers)
         self._user_service.load_mattermost(self._session_id)
+        self._user_service.load_team(self._session_id)
+        self._team_id = self._user_service.get_team_id()
         if not self._users_list:
             self._users_list = self._user_service.get_users_mattermost_as_list()
 
@@ -144,17 +148,18 @@ class MattermostUploadMessages:
             self._channels_slack_ts[channel_id] = (
                 self._get_set_slack_ts(self._mattermost_messages.load_messages(channel_id, self._session_id)))
         if message_data["ts"] in self._channels_slack_ts[channel_id]:
-            self._logger_bot.info(f'Message {message_data["ts"]} has already loaded in Mattermost')
+            self._logger_bot.info(f'Message {message_data["ts"]} has already loaded in Mattermost '
+                                  f'| Session: {self._session_id}')
             return
         user_data = message_data["user"]
 
         user_id = self._user_service.get_user_id_mattermost_by_email(user_data["user_email"])
-        self._logger_bot.info(f'user_data: {user_data}')
+        self._logger_bot.info(f'user_data: {user_data} | Session: {self._session_id}')
         if not user_id:
             slack_user_entity: UserEntity
             slack_user_entity = self._user_service.get_user_entity_slack(user_data["user_id"])
             if slack_user_entity is not None:
-                self._logger_bot.info(f'slack_user_entity: {slack_user_entity.as_dict()}')
+                self._logger_bot.info(f'slack_user_entity: {slack_user_entity.as_dict()} | Session: {self._session_id}')
                 if slack_user_entity.is_bot is not True and slack_user_entity.email is not None:
 
                     user_dict_mm = self._user_service.create_user_mattermost(slack_user_entity,
@@ -344,7 +349,8 @@ class MattermostUploadMessages:
         return channel_id
 
     def _create_channel(self, channel_data: dict) -> str:
-
+        self._logger_bot.info(self._mm_web_client.mattermost_session.headers)
+        self._logger_bot.info(channel_data)
         channel_id = None
 
         if (channel_data["channel_type"] == "direct") or (channel_data["channel_type"] == "group"):
@@ -366,6 +372,8 @@ class MattermostUploadMessages:
             }
             if channel_data["channel_type"] == "private":
                 data["type"] = "P"
+
+            self._logger_bot.info(data)
             response = self._mm_web_client.mattermost_session.post(
                 f'{self._mm_web_client.mattermost_url}/channels', json=data)
 
